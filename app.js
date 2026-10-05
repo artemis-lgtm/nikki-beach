@@ -337,7 +337,7 @@ function viewMap(main) {
     const tip = () => handle.bindTooltip(kmLabel(a.radius_m), { permanent: false, direction: 'right' });
     tip();
     pin.on('drag', () => { const c = pin.getLatLng(); circle.setLatLng(c); handle.setLatLng(edgeOf(c, a.radius_m)); });
-    pin.on('dragend', () => { const c = pin.getLatLng(); a.lat = c.lat; a.lng = c.lng; save(a, { lat: a.lat, lng: a.lng }); });
+    pin.on('dragend', () => { const c = pin.getLatLng(); a.lat = c.lat; a.lng = c.lng; save(a, { lat: a.lat, lng: a.lng }); pin.openPopup(); });   // Austin 10/5: details pop back up once the pin lands
     handle.on('drag', () => { a.radius_m = Math.min(200000, Math.max(50, pin.getLatLng().distanceTo(handle.getLatLng()))); circle.setRadius(a.radius_m); handle.setTooltipContent(kmLabel(a.radius_m)); handle.openTooltip(); });
     handle.on('dragend', () => { handle.setLatLng(edgeOf(pin.getLatLng(), a.radius_m)); save(a, { radius_m: Math.round(a.radius_m) }); });
     pin.bindPopup(() => areaPopup(a), { minWidth: 260 });
