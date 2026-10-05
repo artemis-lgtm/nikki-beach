@@ -282,15 +282,19 @@ function gateModal(lead, stageKey, info) {
 // ---------- Map
 function viewMap(main) {
   // 9/30 Austin: every legend item toggles its markers on and off (remembered while the app is open)
-  const on = state.mapLayers || (state.mapLayers = { hot: true, warm: true, cold: true, open: true, closed: true, lucia: true, concepts: true });
-  const items = [['hot', 'hot', { background: tempColor.hot }], ['warm', 'warm', { background: tempColor.warm }], ['cold', 'cold', { background: tempColor.cold }],
+  const on = state.mapLayers || (state.mapLayers = { areas: true, hot: true, warm: true, cold: true, open: true, closed: true, lucia: true, concepts: true });
+  if (on.areas === undefined) on.areas = true;
+  const items = [['areas', 'Search areas', { background: 'rgba(233,77,140,.25)', border: '2px dashed #e94d8c' }], ['hot', 'hot', { background: tempColor.hot }], ['warm', 'warm', { background: tempColor.warm }], ['cold', 'cold', { background: tempColor.cold }],
     ['open', 'Nikki Beach open / announced', { background: '#16151f', borderRadius: '2px' }], ['closed', 'Nikki Beach closed', { background: '#fff', border: '2px solid #16151f', borderRadius: '2px' }], ['lucia', 'Lucia', { background: '#e9a23b', borderRadius: '2px' }], ['concepts', 'Cocktail Club / Maison Mer', { background: '#2f8596', borderRadius: '2px' }]];
   const layers = {};
   const legend = h('div', { class: 'map-legend', style: { justifyContent: 'center' } }, items.map(([k, label, sw]) => h('button', { class: `legend-toggle${on[k] ? ' on' : ''}`, 'data-keep': '1', 'aria-pressed': String(on[k]), onclick: (e) => {
     on[k] = !on[k]; e.currentTarget.classList.toggle('on', on[k]); e.currentTarget.setAttribute('aria-pressed', String(on[k]));
     if (map) on[k] ? layers[k].addTo(map) : layers[k].remove();
   } }, h('i', { style: sw }), label)));
-  main.append(topbar('Map', 'Candidate sites against the existing Nikki Beach footprint. Click a legend item to show or hide it.'), legend);
+  let dropping = false;
+  const dropBtn = h('button', { class: 'btn primary', 'data-keep': '1', onclick: () => setDropping(!dropping) }, '+ Drop a pin');
+  const hint = h('div', { class: 'map-hint', style: { display: 'none' } }, 'Click the map where you want someone to look. Then drag the white dot on the edge to make the circle bigger or smaller.');
+  main.append(topbar('Map', 'Candidate sites against the existing Nikki Beach footprint. Drop a pin to mark an area to search. Click a legend item to show or hide it.', dropBtn), legend, hint);
   const el = h('div', { class: 'map' });
   main.append(el);
   if (typeof L === 'undefined') { el.append(h('div', { class: 'empty' }, 'Map library did not load.')); return; }
@@ -304,6 +308,64 @@ function viewMap(main) {
   for (const l of state.leads) if (l.lat && l.lng && l.status === 'active' && layers[l.temperature]) L.marker([l.lat, l.lng], { icon: icon(l.temperature), zIndexOffset: 500 }).addTo(layers[l.temperature]).bindPopup(`<b>${escapeHtml(l.name)}</b><br>${escapeHtml(l.address || l.country || '')}<br><a href="#/lead/${l.id}">Open lead →</a>`);
   for (const [k] of items) if (on[k]) layers[k].addTo(map);
   setTimeout(() => map.invalidateSize(), 50);
+
+  // ---- Search areas (Austin 10/5): drop a pin, drag the edge dot to set the radius, name it and assign it.
+  function setDropping(v) {
+    dropping = v; dropBtn.textContent = v ? 'Cancel' : '+ Drop a pin'; dropBtn.classList.toggle('primary', !v);
+    hint.style.display = v ? '' : 'none'; el.classList.toggle('dropping', v);
+    if (v && !on.areas) { on.areas = true; layers.areas.addTo(map); legend.querySelector('.legend-toggle').classList.add('on'); }
+  }
+  map.on('click', async (e) => {
+    if (!dropping) return;
+    setDropping(false);
+    const zoomedOut = map.getZoom() < 9;   // dropped from the world view: zoom in to the pin and start with a 3 km circle
+    const b = map.getBounds(); const radius = zoomedOut ? 3000 : Math.round(Math.max(150, Math.min(50000, b.getNorthEast().distanceTo(b.getSouthWest()) / 12)));
+    if (zoomedOut) map.setView(e.latlng, 12);
+    try { const a = await api('/api/areas', { method: 'POST', body: { lat: e.latlng.lat, lng: e.latlng.lng, radius_m: radius } }); state.areas.push(a); const d = drawArea(a); d.pin.openPopup(); renderAreaList(); }
+    catch (err) { toast(err.message, true); }
+  });
+  const kmLabel = (m) => m >= 1000 ? `${(m / 1000).toFixed(m >= 10000 ? 0 : 1)} km (${(m / 1609.34).toFixed(m >= 16093 ? 0 : 1)} mi)` : `${Math.round(m)} m`;
+  const drawn = new Map();
+  const pinIcon = L.divIcon({ className: '', html: '<div class="area-pin"></div>', iconSize: [22, 30], iconAnchor: [11, 29], popupAnchor: [0, -26] });
+  const handleIcon = L.divIcon({ className: '', html: '<div class="area-handle" title="Drag to resize"></div>', iconSize: [18, 18], iconAnchor: [9, 9] });
+  const edgeOf = (c, r) => { const lat = c.lat * Math.PI / 180; return L.latLng(c.lat, c.lng + (r / (111320 * Math.cos(lat)))); };
+  function drawArea(a) {
+    const center = L.latLng(a.lat, a.lng);
+    const circle = L.circle(center, { radius: a.radius_m, color: '#e94d8c', weight: 2, dashArray: '6 6', fillColor: '#e94d8c', fillOpacity: 0.12, interactive: false }).addTo(layers.areas);
+    const pin = L.marker(center, { icon: pinIcon, draggable: true, zIndexOffset: 800, autoPan: true }).addTo(layers.areas);
+    const handle = L.marker(edgeOf(center, a.radius_m), { icon: handleIcon, draggable: true, zIndexOffset: 900 }).addTo(layers.areas);
+    const tip = () => handle.bindTooltip(kmLabel(a.radius_m), { permanent: false, direction: 'right' });
+    tip();
+    pin.on('drag', () => { const c = pin.getLatLng(); circle.setLatLng(c); handle.setLatLng(edgeOf(c, a.radius_m)); });
+    pin.on('dragend', () => { const c = pin.getLatLng(); a.lat = c.lat; a.lng = c.lng; save(a, { lat: a.lat, lng: a.lng }); });
+    handle.on('drag', () => { a.radius_m = Math.min(200000, Math.max(50, pin.getLatLng().distanceTo(handle.getLatLng()))); circle.setRadius(a.radius_m); handle.setTooltipContent(kmLabel(a.radius_m)); handle.openTooltip(); });
+    handle.on('dragend', () => { handle.setLatLng(edgeOf(pin.getLatLng(), a.radius_m)); save(a, { radius_m: Math.round(a.radius_m) }); });
+    pin.bindPopup(() => areaPopup(a), { minWidth: 260 });
+    const d = { circle, pin, handle }; drawn.set(a.id, d); return d;
+  }
+  async function save(a, patch) { try { Object.assign(a, await api(`/api/areas/${a.id}`, { method: 'PATCH', body: patch })); renderAreaList(); } catch (err) { toast(err.message, true); } }
+  function areaPopup(a) {
+    const f = { name: a.name || '', assigned_to: a.assigned_to || '', notes: a.notes || '' };
+    const users = state.config?.users || [];
+    return h('div', { class: 'area-pop' },
+      h('div', { class: 'field' }, h('label', {}, 'Name'), h('input', { value: f.name, oninput: (e) => f.name = e.target.value, placeholder: 'e.g. Sunny Isles beachfront' })),
+      h('div', { class: 'field' }, h('label', {}, 'Who should look'), h('input', { value: f.assigned_to, list: 'area-users', oninput: (e) => f.assigned_to = e.target.value, placeholder: 'employee or broker' }), h('datalist', { id: 'area-users' }, users.map(u => h('option', { value: u })))),
+      h('div', { class: 'field' }, h('label', {}, 'What to look for'), h('textarea', { rows: 3, oninput: (e) => f.notes = e.target.value }, f.notes)),
+      h('div', { class: 'small muted', style: { margin: '2px 0 10px' } }, `Radius ${kmLabel(a.radius_m)} · drag the white dot to change it`),
+      h('div', { class: 'row', style: { gap: '6px', flexWrap: 'wrap' } },
+        h('button', { class: 'btn sm primary', onclick: async () => { await save(a, f); drawn.get(a.id)?.pin.closePopup(); toast('Saved'); } }, 'Save'),
+        h('button', { class: 'btn sm', onclick: async () => { try { await save(a, f); const lead = await api('/api/leads', { method: 'POST', body: { name: f.name || 'New site', lat: a.lat, lng: a.lng, summary: f.notes || '' } }); await refreshLeads(); toast('Lead created'); navigate(`/lead/${lead.id}`); } catch (err) { toast(err.message, true); } } }, 'Make it a lead'),
+        h('button', { class: 'btn sm ghost danger', onclick: async () => { if (!confirm('Delete this search area?')) return; await api(`/api/areas/${a.id}`, { method: 'DELETE' }); const d = drawn.get(a.id); if (d) { layers.areas.removeLayer(d.circle); layers.areas.removeLayer(d.pin); layers.areas.removeLayer(d.handle); drawn.delete(a.id); } state.areas = state.areas.filter(x => x.id !== a.id); renderAreaList(); } }, 'Delete')));
+  }
+  const areaList = h('div', { class: 'card pad area-list' });
+  function renderAreaList() {
+    const list = state.areas || [];
+    areaList.replaceChildren(h('div', { class: 'eyebrow', style: { marginBottom: '8px' } }, list.length ? `Search areas · ${list.length}` : 'Search areas'),
+      list.length ? h('table', { class: 'table' }, h('tbody', {}, list.map(a => h('tr', { onclick: () => { const d = drawn.get(a.id); map.fitBounds(d.circle.getBounds(), { padding: [40, 40] }); d.pin.openPopup(); el.scrollIntoView({ behavior: 'smooth', block: 'center' }); } },
+        h('td', {}, h('div', { class: 'lead-name' }, a.name || 'New search area'), h('div', { class: 'lead-loc' }, a.notes || '')), h('td', {}, a.assigned_to || h('span', { class: 'muted' }, 'nobody yet')), h('td', { style: { whiteSpace: 'nowrap' } }, kmLabel(a.radius_m)))))) : h('div', { class: 'small muted' }, 'None yet. Press "+ Drop a pin" above the map, then click where you want someone to look.'));
+  }
+  main.append(areaList);
+  (async () => { try { state.areas = await api('/api/areas'); } catch { state.areas = []; } for (const a of state.areas) drawArea(a); renderAreaList(); })();
   footprintBelowMap(main);
 }
 
