@@ -592,7 +592,7 @@ async function viewLead(main, id, tab) {
     h('select', { class: 'input', style: { width: 'auto', borderRadius: '999px' }, onchange: (e) => moveStage(lead, e.target.value) }, state.config.stages.map(s => h('option', { value: s.key, selected: s.key === lead.stage }, s.label))),
     h('button', { class: 'btn ghost', onclick: () => statusModal(lead, save) }, lead.status === 'active' ? 'Park / lose / win' : 'Reactivate'),
   ));
-  const tabs = [['overview', 'Overview'], ['score', 'Scorecard'], ['checklist', 'Winner / loser'], ['qualify', 'Qualification'], ['people', `People (${lead.contacts.length + lead.orgs.length})`], ['activity', `Activity (${lead.activities.length})`], ['documents', `Documents (${lead.documents.length})`], ['registration', `Registration (${lead.registrations.length})`], ['terms', 'Terms']];
+  const tabs = [['overview', 'Overview'], ['score', 'Scorecard'], ['checklist', 'Winner / loser'], ['sitepack', 'Site pack'], ['qualify', 'Qualification'], ['people', `People (${lead.contacts.length + lead.orgs.length})`], ['activity', `Activity (${lead.activities.length})`], ['documents', `Documents (${lead.documents.length})`], ['registration', `Registration (${lead.registrations.length})`], ['terms', 'Terms']];
   const tabsEl = h('div', { class: 'tabs' }, tabs.map(([k, l]) => h('button', { class: k === tab ? 'active' : '', onclick: () => navigate(`/lead/${id}/${k}`) }, l)));
   if (lead.handed_off_at) setTimeout(() => { main.classList.add('handed-off'); main.querySelector('.detail-head')?.after(h('div', { class: 'handoff-banner' }, `Handed off to ${lead.handed_off_to || 'Nikki Beach'} on ${fmt.date(lead.handed_off_at)}.`)); }, 0);
   else if (lead.declined_at) setTimeout(() => { main.classList.add('handed-off'); main.querySelector('.detail-head')?.after(h('div', { class: 'handoff-banner declined' }, `Declined on ${fmt.date(lead.declined_at)}. This property was passed on and is no longer being pursued.`)); }, 0);
@@ -618,6 +618,7 @@ async function viewLead(main, id, tab) {
   if (tab === 'overview') body.append(leadForm(lead, save));
   else if (tab === 'score') body.append(scoreTab(lead, save));
   else if (tab === 'checklist') body.append(checklistTab(lead, save));
+  else if (tab === 'sitepack') body.append(sitepackTab(lead, save));
   else if (tab === 'qualify') body.append(qualifyTab(lead, save));
   else if (tab === 'people') body.append(peopleTab(lead, save, reload));
   else if (tab === 'activity') body.append(activityTab(lead, reload));
@@ -741,6 +742,23 @@ function scoreTab(lead, save) {
   };
   draw();
   return wrap;
+}
+// 10/7 (Peter): Nikki Beach's standard site questions (Celia Serra), answered per lead so we hand them a full pack up front.
+function sitepackTab(lead, save) {
+  const sp = state.config.sitepack;
+  const answers = { ...((lead.checklist || {}).sitepack || {}) };
+  const done = () => sp.items.filter(i => (answers[i.key] || '').trim()).length;
+  const head = h('h2', {}, `${done()} of ${sp.items.length} answered`);
+  const persist = async () => { const cl = { ...(lead.checklist || {}), sitepack: answers }; lead = await save({ checklist: cl, touch: false }, true); head.textContent = `${done()} of ${sp.items.length} answered`; };
+  const copy = h('button', { class: 'btn', onclick: async () => {
+    const txt = `${lead.name}: site information\n\n` + sp.items.map(i => `${i.label}\n${(answers[i.key] || '').trim() || '(still to confirm)'}`).join('\n\n');
+    try { await navigator.clipboard.writeText(txt); toast('Copied, ready to paste into an email'); } catch { toast('Copy failed'); }
+  } }, 'Copy as email text');
+  return h('div', {},
+    h('div', { class: 'card pad', style: { marginBottom: '16px' } }, head, h('div', { class: 'small muted' }, sp.intro), h('div', { class: 'btn-row', style: { marginTop: '10px' } }, copy)),
+    ...sp.items.map(i => h('div', { class: 'card pad', style: { marginBottom: '12px' } },
+      h('h3', { style: { marginBottom: '4px' } }, i.label), h('div', { class: 'small muted', style: { marginBottom: '8px' } }, i.ask),
+      h('textarea', { class: 'input', rows: 3, placeholder: 'Answer from the owner, with the source (plan, permit, email)', onchange: async (e) => { answers[i.key] = e.target.value; await persist(); } }, answers[i.key] || ''))));
 }
 function checklistTab(lead, save) {
   const cl = state.config.checklist;
