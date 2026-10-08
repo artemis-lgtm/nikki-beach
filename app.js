@@ -592,7 +592,7 @@ async function viewLead(main, id, tab) {
     h('select', { class: 'input', style: { width: 'auto', borderRadius: '999px' }, onchange: (e) => moveStage(lead, e.target.value) }, state.config.stages.map(s => h('option', { value: s.key, selected: s.key === lead.stage }, s.label))),
     h('button', { class: 'btn ghost', onclick: () => statusModal(lead, save) }, lead.status === 'active' ? 'Park / lose / win' : 'Reactivate'),
   ));
-  const tabs = [['overview', 'Overview'], ['score', 'Scorecard'], ['checklist', 'Winner / loser'], ['sitepack', 'Site pack'], ['qualify', 'Qualification'], ['people', `People (${lead.contacts.length + lead.orgs.length})`], ['activity', `Activity (${lead.activities.length})`], ['documents', `Documents (${lead.documents.length})`], ['registration', `Registration (${lead.registrations.length})`], ['terms', 'Terms']];
+  const tabs = [['overview', 'Overview'], ['score', 'Scorecard'], ['checklist', 'Winner / loser'], ['sitepack', 'Site pack'], ['people', `People (${lead.contacts.length + lead.orgs.length})`], ['activity', `Activity (${lead.activities.length})`], ['documents', `Documents (${lead.documents.length})`], ['registration', `Registration (${lead.registrations.length})`], ['terms', 'Terms']];
   const tabsEl = h('div', { class: 'tabs' }, tabs.map(([k, l]) => h('button', { class: k === tab ? 'active' : '', onclick: () => navigate(`/lead/${id}/${k}`) }, l)));
   if (lead.handed_off_at) setTimeout(() => { main.classList.add('handed-off'); main.querySelector('.detail-head')?.after(h('div', { class: 'handoff-banner' }, `Handed off to ${lead.handed_off_to || 'Nikki Beach'} on ${fmt.date(lead.handed_off_at)}.`)); }, 0);
   else if (lead.declined_at) setTimeout(() => { main.classList.add('handed-off'); main.querySelector('.detail-head')?.after(h('div', { class: 'handoff-banner declined' }, `Declined on ${fmt.date(lead.declined_at)}. This property was passed on and is no longer being pursued.`)); }, 0);
@@ -619,7 +619,6 @@ async function viewLead(main, id, tab) {
   else if (tab === 'score') body.append(scoreTab(lead, save));
   else if (tab === 'checklist') body.append(checklistTab(lead, save));
   else if (tab === 'sitepack') body.append(sitepackTab(lead, save));
-  else if (tab === 'qualify') body.append(qualifyTab(lead, save));
   else if (tab === 'people') body.append(peopleTab(lead, save, reload));
   else if (tab === 'activity') body.append(activityTab(lead, reload));
   else if (tab === 'documents') body.append(documentsTab(lead, reload));
@@ -814,6 +813,8 @@ function peopleTab(lead, save, reload) {
   const linkRow = h('div', { class: 'btn-row', style: { marginBottom: '14px' } }, cSel, cRole,
     h('button', { class: 'btn', onclick: async () => { if (!cSel.value) return; await api(`/api/leads/${lead.id}/contacts`, { method: 'POST', body: { contact_id: Number(cSel.value), role: cRole.value } }); toast('Linked'); reload(); } }, 'Link'),
     h('button', { class: 'btn primary', onclick: () => contactModal(null, async (c) => { await api(`/api/leads/${lead.id}/contacts`, { method: 'POST', body: { contact_id: c.id, role: cRole.value || c.role } }); reload(); }) }, '+ New contact'));
+  // 10/7 Peter: adding people works without "Edit lead"
+  for (const el of [...orgRow.querySelectorAll('*'), ...linkRow.querySelectorAll('*')]) el.dataset.keep = '1';
   return h('div', {},
     h('div', { class: 'card pad', style: { marginBottom: '16px' } }, h('h3', { style: { marginBottom: '10px' } }, 'Ownership chain and partners'), orgRow,
       lead.orgs.length ? h('table', { class: 'table' }, h('tbody', {}, lead.orgs.map(o => h('tr', { onclick: () => orgModal(state.orgs.find(x => x.id === o.id) || o) }, h('td', {}, h('div', { class: 'lead-name' }, o.name), h('div', { class: 'lead-loc' }, [fmt.title(o.kind), o.country].filter(Boolean).join(' · '))), h('td', {}, h('span', { class: 'pill' }, fmt.title(o.role)), ' ', h('span', { class: `pill ${o.confidence === 'confirmed' ? 'ok' : o.confidence === 'rumoured' ? 'warn' : ''}` }, o.confidence)), h('td', { class: 'small' }, o.source_url ? h('a', { href: o.source_url, target: '_blank', onclick: (e) => e.stopPropagation() }, 'source') : h('span', { class: 'muted' }, 'no source')), h('td', { style: { textAlign: 'right' } }, h('button', { class: 'btn sm ghost danger', onclick: async (e) => { e.stopPropagation(); await api(`/api/leads/${lead.id}/orgs/${o.id}/${o.role}`, { method: 'DELETE' }); await refreshLeads(); reload(); } }, 'Unlink')))))) : h('div', { class: 'empty small' }, 'Who owns the land, who develops it, who funds it. Each with a confidence and a source.')),
