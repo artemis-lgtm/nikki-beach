@@ -416,22 +416,24 @@ function viewTasks(main) {
   const leadSel = h('select', { class: 'input', 'data-keep': '1', style: { width: '280px' } }, h('option', { value: '' }, 'Property…'), [...state.leads].sort((a, b) => a.name.localeCompare(b.name)).map(l => h('option', { value: l.id }, l.name)));
   const text = h('input', { class: 'input', 'data-keep': '1', placeholder: 'New task', style: { flex: 1, minWidth: '200px' } });
   const due = h('input', { class: 'input', 'data-keep': '1', type: 'date', style: { width: 'auto' }, title: 'Due date (optional)' });
+  const prio = h('select', { class: 'input', 'data-keep': '1', style: { width: 'auto' }, title: 'Priority' }, Object.entries(PRIO).map(([k, [l]]) => h('option', { value: k, selected: k === 'normal' }, l)));
   const add = async () => {
     const l = state.leads.find(x => x.id === Number(leadSel.value));
     if (!l) return toast('Pick a property first', true);
     if (!text.value.trim()) return;
-    await saveTasks(l, [...((l.checklist || {}).tasks || []), { text: text.value.trim(), due: due.value || '', done: false, by: (state.user?.name || state.user || ''), at: today() }]);
+    await saveTasks(l, [...((l.checklist || {}).tasks || []), { text: text.value.trim(), due: due.value || '', priority: prio.value, done: false, by: (state.user?.name || state.user || ''), at: today() }]);
   };
   const groups = state.leads.map(l => ({ l, open: ((l.checklist || {}).tasks || []).map((t, i) => [t, i]).filter(([t]) => !t.done) }))
     .filter(g => g.open.length).sort((a, b) => a.l.name.localeCompare(b.l.name));
   const total = groups.reduce((n, g) => n + g.open.length, 0);
   main.append(topbar('Tasks - To Do', `${total} open across ${groups.length} ${groups.length === 1 ? 'property' : 'properties'}. Tick one off and it drops off this list; it stays ticked on the property's To do tab.`),
-    h('div', { class: 'card pad', style: { marginBottom: '20px' } }, h('div', { class: 'row' }, leadSel, text, due, h('button', { class: 'btn primary', 'data-keep': '1', onclick: add }, 'Add task'))),
+    h('div', { class: 'card pad', style: { marginBottom: '20px' } }, h('div', { class: 'row' }, leadSel, text, due, prio, h('button', { class: 'btn primary', 'data-keep': '1', onclick: add }, 'Add task'))),
     ...(groups.length ? groups.map(({ l, open }) => h('div', { class: 'card pad', style: { marginBottom: '14px' } },
       h('h3', { style: { marginBottom: '8px' } }, h('a', { href: `#/lead/${l.id}/activity` }, l.name), h('span', { class: 'small muted', style: { marginLeft: '8px' } }, [l.city, `${open.length} open`].filter(Boolean).join(' · '))),
-      open.sort((a, b) => (a[0].due || '9').localeCompare(b[0].due || '9')).map(([t, i]) => h('label', { class: 'gate-row' },
+      open.sort((a, b) => (prioRank(a[0]) - prioRank(b[0])) || (a[0].due || '9').localeCompare(b[0].due || '9')).map(([t, i]) => h('label', { class: 'gate-row', style: { alignItems: 'center' } },
         h('input', { type: 'checkbox', 'data-keep': '1', onchange: async () => { const tasks = [...l.checklist.tasks]; tasks[i] = { ...t, done: true, done_at: today() }; await saveTasks(l, tasks); } }),
-        h('span', { style: { flex: 1 } }, t.text),
+        h('span', { title: `${PRIO[t.priority || 'normal'][0]} priority`, style: { width: '8px', height: '8px', borderRadius: '50%', flex: '0 0 8px', background: PRIO[t.priority || 'normal'][1] } }),
+        h('span', { style: { flex: 1, fontWeight: t.priority === 'high' ? 600 : 400 } }, t.text),
         t.due ? h('span', { class: `small ${t.due < today() ? 'pill warn' : 'muted'}` }, `due ${fmt.date(t.due)}`) : null)))) : [h('div', { class: 'empty' }, 'No open tasks. Add one above, or from a property\'s To do tab.')]));
 }
 
@@ -647,7 +649,10 @@ async function viewLead(main, id, tab) {
     h('div', { class: 'card pad' }, h('div', { class: 'eyebrow', style: { marginBottom: '10px' } }, 'HI economics'), h('dl', { class: 'kv' }, h('dt', {}, 'Expected fee'), h('dd', {}, fmt.money(lead.expected_fee_usd_calc)), h('dt', {}, 'Weighted'), h('dd', {}, `${fmt.money(lead.weighted_fee_usd)} at ${Math.round((st?.probability ?? 0) * 100)}%`), h('dt', {}, 'Gross revenue'), h('dd', {}, fmt.money(lead.est_revenue_usd) || h('span', { class: 'muted' }, 'set in Overview')))),
     h('div', { class: 'card pad' }, h('div', { class: 'eyebrow', style: { marginBottom: '10px' } }, 'Market'), lead.region && state.config.markets[lead.region] ? h('div', {}, h('div', { class: 'lead-name' }, regionLabel(lead.region)), h('div', { class: 'fitbar', style: { margin: '6px 0' } }, [1, 2, 3, 4, 5].map(i => h('i', { class: i <= (state.config.markets[lead.region].fit ?? 0) ? 'on' : '' }))), h('div', { class: 'small muted' }, state.config.markets[lead.region].why)) : h('div', { class: 'small muted' }, 'Assign a market in Overview to pull in the fit suggestion.')),
   );
-  main.append(head, tabsEl, h('div', { class: 'detail' }, body, side));
+  // 10/8 Peter: the lead's tasks in their own box on the lead page. 'side' = top of the right column (default), 'top' = full-width strip above the tabs, 'tab' = To do tab only.
+  const taskPos = (() => { try { return localStorage.getItem('nb_taskpos') || 'side'; } catch { return 'side'; } })();
+  if (taskPos === 'side') side.prepend(todoCard(lead, save, { openOnly: true }));
+  main.append(head, ...(taskPos === 'top' ? [todoCard(lead, save, { openOnly: true })] : []), tabsEl, h('div', { class: 'detail' }, body, side));
 
   if (tab === 'overview') body.append(leadForm(lead, save));
   else if (tab === 'score') body.append(scoreTab(lead, save));
@@ -857,26 +862,32 @@ function peopleTab(lead, save, reload) {
   return wrap;
 }
 // 10/7 Peter: the lead's open tasks sit on top of the activity log. Stored in checklist.tasks, works without "Edit lead".
-function todoCard(lead, save) {
+// 10/8 Peter: priorities, and the same box on the lead page itself (placement: TASK_POS, see viewLead).
+const PRIO = { high: ['High', 'var(--hot, #d9534f)'], normal: ['Normal', 'var(--muted, #888)'], low: ['Low', 'var(--hairline, #ccc)'] };
+const prioRank = (t) => ({ high: 0, normal: 1, low: 2 })[t.priority || 'normal'];
+function todoCard(lead, save, opts = {}) {
   const tasks = [...((lead.checklist || {}).tasks || [])];
-  const card = h('div', { class: 'card pad', style: { marginBottom: '16px' } });
+  const card = h('div', { class: 'card pad task-box', style: { marginBottom: '16px', borderRadius: '14px', borderLeft: '4px solid var(--link)' } });
   const persist = async () => { lead = await save({ checklist: { ...(lead.checklist || {}), tasks }, touch: false }, true); draw(); };
   const draw = () => {
-    const text = h('input', { class: 'input', 'data-keep': '1', placeholder: 'Add a task for this lead', style: { flex: 1 } });
+    const text = h('input', { class: 'input', 'data-keep': '1', placeholder: 'Add a task for this lead', style: { flex: 1, minWidth: '140px' } });
     const due = h('input', { class: 'input', 'data-keep': '1', type: 'date', style: { width: 'auto' }, title: 'Due date (optional)' });
-    const add = async () => { if (!text.value.trim()) return; tasks.push({ text: text.value.trim(), due: due.value || '', done: false, by: (state.user?.name || state.user || ''), at: today() }); await persist(); };
+    const prio = h('select', { class: 'input', 'data-keep': '1', style: { width: 'auto' }, title: 'Priority' }, Object.entries(PRIO).map(([k, [l]]) => h('option', { value: k, selected: k === 'normal' }, l)));
+    const add = async () => { if (!text.value.trim()) return; tasks.push({ text: text.value.trim(), due: due.value || '', priority: prio.value, done: false, by: (state.user?.name || state.user || ''), at: today() }); await persist(); };
     text.addEventListener('keydown', (e) => { if (e.key === 'Enter') add(); });
     const open = tasks.filter(t => !t.done).length;
-    const order = tasks.map((t, i) => [t, i]).sort((a, b) => (a[0].done - b[0].done) || (a[0].due || '9').localeCompare(b[0].due || '9'));
+    const order = tasks.map((t, i) => [t, i]).filter(([t]) => !opts.openOnly || !t.done)
+      .sort((a, b) => (a[0].done - b[0].done) || (prioRank(a[0]) - prioRank(b[0])) || (a[0].due || '9').localeCompare(b[0].due || '9'));
     card.replaceChildren(
-      h('h3', { style: { marginBottom: '10px' } }, `To do (${open} open)`),
-      ...order.map(([t, i]) => h('label', { class: 'gate-row', style: { opacity: t.done ? 0.5 : 1 } },
+      h('h3', { style: { marginBottom: '10px' } }, `Tasks (${open} open)`),
+      ...order.map(([t, i]) => h('label', { class: 'gate-row', style: { opacity: t.done ? 0.5 : 1, alignItems: 'center' } },
         h('input', { type: 'checkbox', 'data-keep': '1', checked: !!t.done, onchange: async (e) => { tasks[i] = { ...t, done: e.target.checked, done_at: e.target.checked ? today() : '' }; await persist(); } }),
-        h('span', { style: { flex: 1, textDecoration: t.done ? 'line-through' : '' } }, t.text),
-        t.due ? h('span', { class: `small ${!t.done && t.due < today() ? 'pill warn' : 'muted'}` }, `due ${fmt.date(t.due)}`) : null,
+        h('span', { title: `${PRIO[t.priority || 'normal'][0]} priority`, style: { width: '8px', height: '8px', borderRadius: '50%', flex: '0 0 8px', background: PRIO[t.priority || 'normal'][1] } }),
+        h('div', { style: { flex: 1 } }, h('div', { style: { textDecoration: t.done ? 'line-through' : '', fontWeight: t.priority === 'high' && !t.done ? 600 : 400 } }, t.text),
+          t.due ? h('div', { class: `small ${!t.done && t.due < today() ? 'pill warn' : 'muted'}`, style: { marginTop: '2px', display: 'inline-block' } }, `due ${fmt.date(t.due)}`) : null),
         h('button', { class: 'btn ghost sm', 'data-keep': '1', title: 'Remove', onclick: async (e) => { e.preventDefault(); tasks.splice(i, 1); await persist(); } }, '×'))),
-      tasks.length ? null : h('div', { class: 'empty small' }, 'Nothing to do yet.'),
-      h('div', { class: 'row', style: { marginTop: '10px' } }, text, due, h('button', { class: 'btn primary', 'data-keep': '1', onclick: add }, 'Add task')));
+      ...(order.length ? [] : [h('div', { class: 'empty small' }, 'No open tasks.')]),
+      h('div', { class: 'row', style: { marginTop: '10px', flexWrap: 'wrap', gap: '6px' } }, text, due, prio, h('button', { class: 'btn primary', 'data-keep': '1', onclick: add }, 'Add task')));
   };
   draw();
   return card;
