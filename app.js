@@ -409,6 +409,13 @@ function viewMarkets(main) {
 }
 
 // ---------- People
+// 10/7 Peter: search on the People pages. Filters every table row under `scope` by its text.
+function peopleSearch(scope, placeholder = 'Search people and companies…') {
+  return h('input', { class: 'input', 'data-keep': '1', placeholder, style: { maxWidth: '420px', marginBottom: '16px' }, oninput: (e) => {
+    const q = e.target.value.trim().toLowerCase();
+    for (const tr of scope().querySelectorAll('tbody tr')) tr.style.display = !q || tr.textContent.toLowerCase().includes(q) ? '' : 'none';
+  } });
+}
 function viewPeople(main) {
   // 9/30 Austin: laid out like the Overview, one full-width list per group; click a row for the detail card (Edit bottom left)
   main.append(topbar('People', 'Everyone tied to the properties, and the companies behind them.', h('button', { class: 'btn', 'data-keep': '1', onclick: () => orgModal() }, '+ Organisation'), h('button', { class: 'btn primary', 'data-keep': '1', onclick: () => contactModal() }, '+ Contact')));
@@ -420,7 +427,7 @@ function viewPeople(main) {
     h('div', { class: 'card wide-scroll', style: { borderLeft: `4px solid ${color}` } }, h('table', { class: 'table' }, h('thead', {}, h('tr', {}, head.map(x => h('th', { style: { whiteSpace: 'nowrap' } }, x)))), h('tbody', {}, rows))));
   const people = [...state.contacts].sort((a, b) => a.name.localeCompare(b.name));
   const orgs = [...state.orgs].sort((a, b) => a.name.localeCompare(b.name));
-  main.append(
+  main.append(peopleSearch(() => main),
     section('People', people.length, 'var(--link)', ['Name', 'Title', 'Company', 'Phone', 'Email', 'Properties', 'Notes'], people.map(c => h('tr', { onclick: () => contactModal(c) },
       h('td', { style: { minWidth: '180px' } }, h('div', { class: 'lead-name' }, c.name)),
       h('td', { class: 'small' }, c.title || ''), h('td', { class: 'small', style: { minWidth: '160px' } }, c.org_name || ''),
@@ -592,7 +599,7 @@ async function viewLead(main, id, tab) {
     h('select', { class: 'input', style: { width: 'auto', borderRadius: '999px' }, onchange: (e) => moveStage(lead, e.target.value) }, state.config.stages.map(s => h('option', { value: s.key, selected: s.key === lead.stage }, s.label))),
     h('button', { class: 'btn ghost', onclick: () => statusModal(lead, save) }, lead.status === 'active' ? 'Park / lose / win' : 'Reactivate'),
   ));
-  const tabs = [['overview', 'Overview'], ['score', 'Scorecard'], ['checklist', 'Winner / loser'], ['sitepack', 'Site pack'], ['people', `People (${lead.contacts.length + lead.orgs.length})`], ['activity', `Activity (${lead.activities.length})`], ['documents', `Documents (${lead.documents.length})`], ['registration', `Registration (${lead.registrations.length})`], ['terms', 'Terms']];
+  const tabs = [['overview', 'Overview'], ['score', 'Scorecard'], ['checklist', 'Winner / loser'], ['sitepack', 'Site pack'], ['people', `People (${lead.contacts.length + lead.orgs.length})`], ['activity', `To do & activity (${((lead.checklist || {}).tasks || []).filter(t => !t.done).length} open)`], ['documents', `Documents (${lead.documents.length})`], ['terms', 'Terms']];
   const tabsEl = h('div', { class: 'tabs' }, tabs.map(([k, l]) => h('button', { class: k === tab ? 'active' : '', onclick: () => navigate(`/lead/${id}/${k}`) }, l)));
   if (lead.handed_off_at) setTimeout(() => { main.classList.add('handed-off'); main.querySelector('.detail-head')?.after(h('div', { class: 'handoff-banner' }, `Handed off to ${lead.handed_off_to || 'Nikki Beach'} on ${fmt.date(lead.handed_off_at)}.`)); }, 0);
   else if (lead.declined_at) setTimeout(() => { main.classList.add('handed-off'); main.querySelector('.detail-head')?.after(h('div', { class: 'handoff-banner declined' }, `Declined on ${fmt.date(lead.declined_at)}. This property was passed on and is no longer being pursued.`)); }, 0);
@@ -620,10 +627,9 @@ async function viewLead(main, id, tab) {
   else if (tab === 'checklist') body.append(checklistTab(lead, save));
   else if (tab === 'sitepack') body.append(sitepackTab(lead, save));
   else if (tab === 'people') body.append(peopleTab(lead, save, reload));
-  else if (tab === 'activity') body.append(activityTab(lead, reload));
+  else if (tab === 'activity') body.append(activityTab(lead, reload, save));
   else if (tab === 'documents') body.append(documentsTab(lead, reload));
   else if (tab === 'terms') body.append(termsTab(lead, save));
-  else if (tab === 'registration') body.append(registrationTab(lead, reload));
 }
 const REG_EVENTS = [['acknowledged', 'Penrod acknowledged'], ['disputed', 'Disputed by Penrod'], ['renewed', 'Renewed (+12 months on evidence of activity)'], ['converted', 'Converted (agreement signed)'], ['commission', 'Commission event (closing fee / trailing)'], ['released', 'Released'], ['expired', 'Expired'], ['note', 'Note']];
 function registrationTab(lead, reload) {
@@ -812,16 +818,43 @@ function peopleTab(lead, save, reload) {
   const cRole = h('select', { class: 'input', style: { width: 'auto' } }, h('option', { value: '' }, 'role on this deal'), CONTACT_ROLES.map(([v, l]) => h('option', { value: v }, l)));
   const linkRow = h('div', { class: 'btn-row', style: { marginBottom: '14px' } }, cSel, cRole,
     h('button', { class: 'btn', onclick: async () => { if (!cSel.value) return; await api(`/api/leads/${lead.id}/contacts`, { method: 'POST', body: { contact_id: Number(cSel.value), role: cRole.value } }); toast('Linked'); reload(); } }, 'Link'),
-    h('button', { class: 'btn primary', onclick: () => contactModal(null, async (c) => { await api(`/api/leads/${lead.id}/contacts`, { method: 'POST', body: { contact_id: c.id, role: cRole.value || c.role } }); reload(); }) }, '+ New contact'));
+    h('button', { class: 'btn primary', onclick: () => contactModal(null, async (c) => { await api(`/api/leads/${lead.id}/contacts`, { method: 'POST', body: { contact_id: c.id, role: cRole.value || c.role } }); reload(); }) }, '+ Add contact'));
   // 10/7 Peter: adding people works without "Edit lead"
   for (const el of [...orgRow.querySelectorAll('*'), ...linkRow.querySelectorAll('*')]) el.dataset.keep = '1';
-  return h('div', {},
+  const wrap = h('div', {});
+  wrap.append(peopleSearch(() => wrap, 'Search people on this deal…'),
     h('div', { class: 'card pad', style: { marginBottom: '16px' } }, h('h3', { style: { marginBottom: '10px' } }, 'Ownership chain and partners'), orgRow,
       lead.orgs.length ? h('table', { class: 'table' }, h('tbody', {}, lead.orgs.map(o => h('tr', { onclick: () => orgModal(state.orgs.find(x => x.id === o.id) || o) }, h('td', {}, h('div', { class: 'lead-name' }, o.name), h('div', { class: 'lead-loc' }, [fmt.title(o.kind), o.country].filter(Boolean).join(' · '))), h('td', {}, h('span', { class: 'pill' }, fmt.title(o.role)), ' ', h('span', { class: `pill ${o.confidence === 'confirmed' ? 'ok' : o.confidence === 'rumoured' ? 'warn' : ''}` }, o.confidence)), h('td', { class: 'small' }, o.source_url ? h('a', { href: o.source_url, target: '_blank', onclick: (e) => e.stopPropagation() }, 'source') : h('span', { class: 'muted' }, 'no source')), h('td', { style: { textAlign: 'right' } }, h('button', { class: 'btn sm ghost danger', onclick: async (e) => { e.stopPropagation(); await api(`/api/leads/${lead.id}/orgs/${o.id}/${o.role}`, { method: 'DELETE' }); await refreshLeads(); reload(); } }, 'Unlink')))))) : h('div', { class: 'empty small' }, 'Who owns the land, who develops it, who funds it. Each with a confidence and a source.')),
     h('div', { class: 'card pad' }, h('h3', { style: { marginBottom: '10px' } }, 'People on this deal'), linkRow,
       lead.contacts.length ? h('table', { class: 'table' }, h('tbody', {}, lead.contacts.map(c => h('tr', { onclick: () => contactModal(c) }, h('td', {}, h('div', { class: 'lead-name' }, c.name), h('div', { class: 'lead-loc' }, [c.title, c.org_name].filter(Boolean).join(' · '))), h('td', {}, c.lead_role ? h('span', { class: 'pill' }, fmt.title(c.lead_role)) : ''), h('td', { class: 'small' }, c.email ? h('a', { href: `mailto:${c.email}`, onclick: (e) => e.stopPropagation() }, c.email) : '', c.phone ? h('div', {}, c.phone) : ''), h('td', { style: { textAlign: 'right' } }, h('button', { class: 'btn sm ghost danger', onclick: async (e) => { e.stopPropagation(); await api(`/api/leads/${lead.id}/contacts/${c.id}`, { method: 'DELETE' }); reload(); } }, 'Unlink')))))) : h('div', { class: 'empty small' }, 'No contacts linked. Who is the economic buyer, who is the champion, who can walk us in?')));
+  return wrap;
 }
-function activityTab(lead, reload) {
+// 10/7 Peter: the lead's open tasks sit on top of the activity log. Stored in checklist.tasks, works without "Edit lead".
+function todoCard(lead, save) {
+  const tasks = [...((lead.checklist || {}).tasks || [])];
+  const card = h('div', { class: 'card pad', style: { marginBottom: '16px' } });
+  const persist = async () => { lead = await save({ checklist: { ...(lead.checklist || {}), tasks }, touch: false }, true); draw(); };
+  const draw = () => {
+    const text = h('input', { class: 'input', 'data-keep': '1', placeholder: 'Add a task for this lead', style: { flex: 1 } });
+    const due = h('input', { class: 'input', 'data-keep': '1', type: 'date', style: { width: 'auto' }, title: 'Due date (optional)' });
+    const add = async () => { if (!text.value.trim()) return; tasks.push({ text: text.value.trim(), due: due.value || '', done: false, by: (state.user?.name || state.user || ''), at: today() }); await persist(); };
+    text.addEventListener('keydown', (e) => { if (e.key === 'Enter') add(); });
+    const open = tasks.filter(t => !t.done).length;
+    const order = tasks.map((t, i) => [t, i]).sort((a, b) => (a[0].done - b[0].done) || (a[0].due || '9').localeCompare(b[0].due || '9'));
+    card.replaceChildren(
+      h('h3', { style: { marginBottom: '10px' } }, `To do (${open} open)`),
+      ...order.map(([t, i]) => h('label', { class: 'gate-row', style: { opacity: t.done ? 0.5 : 1 } },
+        h('input', { type: 'checkbox', 'data-keep': '1', checked: !!t.done, onchange: async (e) => { tasks[i] = { ...t, done: e.target.checked, done_at: e.target.checked ? today() : '' }; await persist(); } }),
+        h('span', { style: { flex: 1, textDecoration: t.done ? 'line-through' : '' } }, t.text),
+        t.due ? h('span', { class: `small ${!t.done && t.due < today() ? 'pill warn' : 'muted'}` }, `due ${fmt.date(t.due)}`) : null,
+        h('button', { class: 'btn ghost sm', 'data-keep': '1', title: 'Remove', onclick: async (e) => { e.preventDefault(); tasks.splice(i, 1); await persist(); } }, '×'))),
+      tasks.length ? null : h('div', { class: 'empty small' }, 'Nothing to do yet.'),
+      h('div', { class: 'row', style: { marginTop: '10px' } }, text, due, h('button', { class: 'btn primary', 'data-keep': '1', onclick: add }, 'Add task')));
+  };
+  draw();
+  return card;
+}
+function activityTab(lead, reload, save) {
   const events = state.config.heat.events;
   let kind = 'note';
   const ta = h('textarea', { class: 'input', placeholder: 'What happened? What did they say? What did we promise?', style: { minHeight: '84px' } });
@@ -830,7 +863,7 @@ function activityTab(lead, reload) {
   const at = h('input', { class: 'input', type: 'date', value: today(), style: { width: 'auto' }, title: 'When it happened' });
   const chips = h('div', { class: 'row' }, Object.entries(events).map(([k, e]) => h('button', { class: `chip${k === kind ? ' on' : ''}${e.direction === 'inbound' ? ' inbound' : ''}`, title: e.points ? `+${e.points} heat (${e.direction})` : 'no heat', onclick: (ev) => { kind = k; chips.querySelectorAll('.chip').forEach(c => c.classList.remove('on')); ev.target.classList.add('on'); } }, e.label)));
   const composer = h('div', { class: 'card pad composer' }, h('div', { class: 'small muted' }, 'Inbound events (their reply, a meeting, a site visit) heat the lead. Our outbound barely does.'), chips, ta, h('div', { class: 'row' }, at, na, nd, h('button', { class: 'btn primary', onclick: async () => { if (!ta.value.trim() && kind === 'note') return toast('Write something first', true); const body = { kind, body: ta.value.trim(), at: at.value }; if (na.value) body.next_action = na.value; if (nd.value) body.next_action_due = nd.value; await api(`/api/leads/${lead.id}/activities`, { method: 'POST', body }); await refreshLeads(); toast('Logged'); reload(); } }, 'Log')));
-  return h('div', {}, composer, h('div', { class: 'card pad', style: { marginTop: '16px' } }, lead.activities.length ? lead.activities.map(a => h('div', { class: `tl ${a.kind} ${a.direction || ''}` }, h('div', { class: 'dot' }), h('div', {}, h('div', { class: 'who' }, `${events[a.kind]?.label || fmt.title(a.kind)}${a.direction && a.direction !== 'none' ? ` · ${a.direction}` : ''} · ${a.by_user || 'system'} · ${fmt.dt(a.at)}`, events[a.kind]?.points ? h('span', { class: 'mono', style: { marginLeft: '8px' } }, `+${events[a.kind].points}`) : null, ['system', 'stage_change', 'score_change'].includes(a.kind) ? null : h('button', { class: 'btn sm ghost danger', style: { marginLeft: '8px' }, onclick: async () => { if (!confirm('Delete this entry?')) return; await api(`/api/leads/${lead.id}/activities/${a.id}`, { method: 'DELETE' }); await refreshLeads(); reload(); } }, 'delete')), h('div', { class: 'body' }, a.body)))) : h('div', { class: 'empty small' }, 'No activity yet.')));
+  return h('div', {}, todoCard(lead, save), composer, h('div', { class: 'card pad', style: { marginTop: '16px' } }, lead.activities.length ? lead.activities.map(a => h('div', { class: `tl ${a.kind} ${a.direction || ''}` }, h('div', { class: 'dot' }), h('div', {}, h('div', { class: 'who' }, `${events[a.kind]?.label || fmt.title(a.kind)}${a.direction && a.direction !== 'none' ? ` · ${a.direction}` : ''} · ${a.by_user || 'system'} · ${fmt.dt(a.at)}`, events[a.kind]?.points ? h('span', { class: 'mono', style: { marginLeft: '8px' } }, `+${events[a.kind].points}`) : null, ['system', 'stage_change', 'score_change'].includes(a.kind) ? null : h('button', { class: 'btn sm ghost danger', style: { marginLeft: '8px' }, onclick: async () => { if (!confirm('Delete this entry?')) return; await api(`/api/leads/${lead.id}/activities/${a.id}`, { method: 'DELETE' }); await refreshLeads(); reload(); } }, 'delete')), h('div', { class: 'body' }, a.body)))) : h('div', { class: 'empty small' }, 'No activity yet.')));
 }
 function documentsTab(lead, reload) {
   const kindSel = h('select', { class: 'input', style: { width: 'auto' } }, DOC_KINDS.map(([k, l]) => h('option', { value: k }, l)));
