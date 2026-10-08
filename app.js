@@ -131,7 +131,7 @@ new MutationObserver(() => applyLock()).observe(document.body, { childList: true
 
 // ---------- Shell + router
 const NAV = [
-  ['/', 'Overview'], ['/map', 'Map'],
+  ['/', 'Overview'], ['/map', 'Map'], ['/tasks', 'Tasks - To Do'],
   ['sep'], ['/people', 'People'], ['/review', 'Weekly review'], ['/playbook', 'Playbook'], ['/markets', 'Markets'],
 ];
 function render() {
@@ -139,7 +139,7 @@ function render() {
   const app = $('#app');
   app.className = 'app';
   const active = state.leads.filter(l => l.status === 'active');
-  const counts = { '/': active.length };
+  const counts = { '/': active.length, '/tasks': state.leads.reduce((n, l) => n + ((l.checklist || {}).tasks || []).filter(t => !t.done).length, 0) };
   const rail = h('aside', { class: 'rail' },
     // 9/30 Austin: the logo alone, no "Nikki Beach Leads" text (logo from Peter, cleaned by scripts/install-logo.py)
     h('div', { class: 'brand' }, h('img', { class: 'brand-logo', src: 'logo.png', alt: 'Nikki Beach' })),
@@ -160,6 +160,7 @@ function render() {
   if (r === '/' || /^\/(pipeline|triage|board)/.test(r)) viewPipeline(main);
   else if (r.startsWith('/map')) viewMap(main);
   else if (r.startsWith('/markets')) viewMarkets(main);
+  else if (r.startsWith('/tasks')) viewTasks(main);
   else if (r.startsWith('/people')) viewPeople(main);
   else if (r.startsWith('/footprint')) navigate('/map');   // 9/30: Footprint now lives under the map
   else if (r.startsWith('/review')) viewReview(main);
@@ -406,6 +407,31 @@ function viewMarkets(main) {
     h('div', { class: 'why' }, m.why || ''),
     h('div', { class: 'tags' }, (m.watch || []).map(t => h('span', { class: 'pill' }, t)), byRegion[k]?.length ? h('a', { class: 'pill ok', href: '#/', onclick: () => { state.filters.region = k; } }, `${byRegion[k].length} in pipeline`) : h('span', { class: 'pill warn' }, 'no leads yet')),
   ))));
+}
+
+// ---------- Tasks (10/7 Peter: every open task on one page, grouped by property). Same checklist.tasks the lead's To do card edits.
+function viewTasks(main) {
+  const saveTasks = async (l, tasks) => { await api(`/api/leads/${l.id}`, { method: 'PATCH', body: { checklist: { ...(l.checklist || {}), tasks }, touch: false } }); await refreshLeads(); render(); };
+  const leadSel = h('select', { class: 'input', 'data-keep': '1', style: { width: '280px' } }, h('option', { value: '' }, 'Property…'), [...state.leads].sort((a, b) => a.name.localeCompare(b.name)).map(l => h('option', { value: l.id }, l.name)));
+  const text = h('input', { class: 'input', 'data-keep': '1', placeholder: 'New task', style: { flex: 1, minWidth: '200px' } });
+  const due = h('input', { class: 'input', 'data-keep': '1', type: 'date', style: { width: 'auto' }, title: 'Due date (optional)' });
+  const add = async () => {
+    const l = state.leads.find(x => x.id === Number(leadSel.value));
+    if (!l) return toast('Pick a property first', true);
+    if (!text.value.trim()) return;
+    await saveTasks(l, [...((l.checklist || {}).tasks || []), { text: text.value.trim(), due: due.value || '', done: false, by: (state.user?.name || state.user || ''), at: today() }]);
+  };
+  const groups = state.leads.map(l => ({ l, open: ((l.checklist || {}).tasks || []).map((t, i) => [t, i]).filter(([t]) => !t.done) }))
+    .filter(g => g.open.length).sort((a, b) => a.l.name.localeCompare(b.l.name));
+  const total = groups.reduce((n, g) => n + g.open.length, 0);
+  main.append(topbar('Tasks - To Do', `${total} open across ${groups.length} ${groups.length === 1 ? 'property' : 'properties'}. Tick one off and it drops off this list; it stays ticked on the property's To do tab.`),
+    h('div', { class: 'card pad', style: { marginBottom: '20px' } }, h('div', { class: 'row' }, leadSel, text, due, h('button', { class: 'btn primary', 'data-keep': '1', onclick: add }, 'Add task'))),
+    ...(groups.length ? groups.map(({ l, open }) => h('div', { class: 'card pad', style: { marginBottom: '14px' } },
+      h('h3', { style: { marginBottom: '8px' } }, h('a', { href: `#/lead/${l.id}/activity` }, l.name), h('span', { class: 'small muted', style: { marginLeft: '8px' } }, [l.city, `${open.length} open`].filter(Boolean).join(' · '))),
+      open.sort((a, b) => (a[0].due || '9').localeCompare(b[0].due || '9')).map(([t, i]) => h('label', { class: 'gate-row' },
+        h('input', { type: 'checkbox', 'data-keep': '1', onchange: async () => { const tasks = [...l.checklist.tasks]; tasks[i] = { ...t, done: true, done_at: today() }; await saveTasks(l, tasks); } }),
+        h('span', { style: { flex: 1 } }, t.text),
+        t.due ? h('span', { class: `small ${t.due < today() ? 'pill warn' : 'muted'}` }, `due ${fmt.date(t.due)}`) : null)))) : [h('div', { class: 'empty' }, 'No open tasks. Add one above, or from a property\'s To do tab.')]));
 }
 
 // ---------- People
