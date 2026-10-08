@@ -66,7 +66,8 @@ const gradeChip = (l) => h('span', { class: 'grade', style: { '--g': gradeColor[
 const heatBar = (l) => h('div', { class: 'heat', title: `Heat ${l.heat_score}/100: ${l.temperature}` }, h('i', { style: { width: `${Math.min(100, l.heat_score)}%`, background: tempColor[l.temperature] } }));
 const navigate = (path) => { location.hash = path; };
 const escapeHtml = (s) => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-const today = () => new Date().toISOString().slice(0, 10);
+// Eastern calendar date, not UTC: after ~8pm ET the UTC date is already tomorrow.
+const today = () => new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
 
 // ---------- Boot
 async function boot() {
