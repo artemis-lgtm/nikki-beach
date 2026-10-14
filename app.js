@@ -133,7 +133,7 @@ new MutationObserver(() => applyLock()).observe(document.body, { childList: true
 // ---------- Shell + router
 const NAV = [
   ['/', 'Overview'], ['/map', 'Map'], ['/tasks', 'Tasks - To Do'],
-  ['sep'], ['/people', 'People'], ['/review', 'Weekly review'], ['/playbook', 'Playbook'], ['/markets', 'Markets'],
+  ['sep'], ['/people', 'People'], ['/brand', 'Brand library'], ['/review', 'Weekly review'], ['/playbook', 'Playbook'], ['/markets', 'Markets'],
 ];
 function render() {
   state.route = location.hash.replace(/^#/, '') || '/';
@@ -163,6 +163,7 @@ function render() {
   else if (r.startsWith('/markets')) viewMarkets(main);
   else if (r.startsWith('/tasks')) viewTasks(main);
   else if (r.startsWith('/people')) viewPeople(main);
+  else if (r.startsWith('/brand')) viewBrand(main);
   else if (r.startsWith('/footprint')) navigate('/map');   // 9/30: Footprint now lives under the map
   else if (r.startsWith('/review')) viewReview(main);
   else if (r.startsWith('/playbook')) viewPlaybook(main);
@@ -435,6 +436,37 @@ function viewTasks(main) {
         h('span', { title: `${PRIO[t.priority || 'normal'][0]} priority`, style: { width: '8px', height: '8px', borderRadius: '50%', flex: '0 0 8px', background: PRIO[t.priority || 'normal'][1] } }),
         h('span', { style: { flex: 1, fontWeight: t.priority === 'high' ? 600 : 400 } }, t.text),
         t.due ? h('span', { class: `small ${t.due < today() ? 'pill warn' : 'muted'}` }, `due ${fmt.date(t.due)}`) : null)))) : [h('div', { class: 'empty' }, 'No open tasks. Add one above, or from a property\'s To do tab.')]));
+}
+
+// ---------- Brand library (10/14 Peter: brand-centric documents that belong to no single lead)
+async function viewBrand(main) {
+  let docs = [];
+  const list = h('div', {});
+  const draw = () => {
+    const brands = [...new Set(docs.map(d => d.brand || 'Other'))];
+    list.replaceChildren(...(docs.length ? brands.map(b => h('div', { class: 'card', style: { marginBottom: '16px' } },
+      h('div', { class: 'card-head' }, h('h3', { style: { margin: 0 } }, b)),
+      h('table', { class: 'table' }, h('tbody', {}, docs.filter(d => (d.brand || 'Other') === b).map(d => h('tr', { style: { cursor: 'default' } },
+        h('td', {}, h('a', { href: d.url, target: '_blank', class: 'lead-name' }, d.title), d.notes ? h('div', { class: 'lead-loc' }, d.notes) : null),
+        h('td', { class: 'small muted', style: { whiteSpace: 'nowrap' } }, d.size ? (d.size > 1e6 ? `${(d.size / 1e6).toFixed(1)} MB` : `${Math.round(d.size / 1e3)} KB`) : ''),
+        h('td', { class: 'small muted', style: { whiteSpace: 'nowrap' } }, `${d.by_user || ''} · ${fmt.date(d.at)}`),
+        h('td', { style: { whiteSpace: 'nowrap', textAlign: 'right' } },
+          h('a', { class: 'btn sm', href: d.url, target: '_blank', 'data-keep': '1' }, 'View'), ' ',
+          h('a', { class: 'btn sm', href: `${d.url}?download=1`, 'data-keep': '1' }, 'Download')))))))) : [h('div', { class: 'empty' }, 'No brand documents yet.')]));
+  };
+  const brandIn = h('input', { class: 'input', 'data-keep': '1', placeholder: 'Brand (e.g. Casa Nikki)', style: { width: '240px' } });
+  const file = h('input', { type: 'file', multiple: true, style: { display: 'none' }, onchange: async (e) => {
+    const files = [...e.target.files]; if (!files.length) return;
+    try {
+      for (const f of files) { const r = await fetch(`/api/brand-docs/upload?filename=${encodeURIComponent(f.name)}&brand=${encodeURIComponent(brandIn.value || 'Nikki Beach')}`, { method: 'PUT', body: f }); if (!r.ok) throw new Error(`Upload failed: ${f.name}`); docs = await r.json(); }
+      toast('Uploaded'); draw();
+    } catch (err) { toast(err.message, true); }
+  } });
+  main.append(topbar('Brand library', 'Brand books, standards and other documents that belong to the brand rather than a single property.'),
+    h('div', { class: 'card pad', style: { marginBottom: '16px' } }, h('div', { class: 'row' }, brandIn, h('button', { class: 'btn primary', 'data-keep': '1', onclick: () => file.click() }, 'Upload document'), file)),
+    list);
+  try { docs = await api('/api/brand-docs'); } catch (e) { toast(e.message, true); }
+  draw();
 }
 
 // ---------- People
