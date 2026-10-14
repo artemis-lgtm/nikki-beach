@@ -229,7 +229,7 @@ const NB_RED = new Set(['DECLINED', 'LOST', 'DO NOT ENGAGE - FRAUD']);
 const NB_COLLAPSED = new Set(['Declined by Nikki Beach', 'Lost (Nikki Beach)', 'Nikki Beach: Do Not Engage (Fraud)']);
 const nbTitle = (s) => s.toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase());
 function nbGroup(status) {
-  const i = NB_STATUS_ORDER.indexOf(status); const order = 500 + (i < 0 ? 50 : i);
+  const i = NB_STATUS_ORDER.indexOf(status); const order = (NB_RED.has(status) ? 1500 : 500) + (i < 0 ? 50 : i);   // 10/14 Austin: Lost / Declined / Do Not Engage sit below Handed Off (1000)
   if (status === 'DECLINED') return ['Declined by Nikki Beach', '#e5532e', order];
   if (status === 'LOST') return ['Lost (Nikki Beach)', '#b4503a', order];
   if (status === 'DO NOT ENGAGE - FRAUD') return ['Nikki Beach: Do Not Engage (Fraud)', '#7a1f12', order];
