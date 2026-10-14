@@ -221,8 +221,43 @@ function groupMap(leads, color) {
   return wrap;
 }
 // Date a property went on the board (Monday's own timestamp), and the 10-day "New listing" badge (Austin 9/30)
-const dateAdded = (l) => l.monday?.created_at || l.created_at;
-const isNewListing = (l) => !l.handed_off_at && !l.declined_at && (Date.now() - Date.parse(dateAdded(l))) < 10 * 86400000;
+const dateAdded = (l) => l.monday?.created_at || l.airtable?.created_at || l.created_at;
+const isNewListing = (l) => !l.handed_off_at && !l.declined_at && !NB_RED.has(l.airtable?.status) && (Date.now() - Date.parse(dateAdded(l))) < 10 * 86400000;
+// 10/14 Austin: Nikki Beach's Airtable BD CRM, mirrored by scripts/airtable-sync.py. Their status decides the group.
+const NB_STATUS_ORDER = ['IN INITIAL REVIEW', 'ONGOING', 'IN PROGRESS', 'PENDING', 'WAITING MORE INFO', 'WAITING INTERNAL FEEDBACK', 'ON HOLD', 'ON HOLD (BY OWNER)', 'SIGNED', 'NO STATUS', 'LOST', 'DECLINED', 'DO NOT ENGAGE - FRAUD'];
+const NB_RED = new Set(['DECLINED', 'LOST', 'DO NOT ENGAGE - FRAUD']);
+const NB_COLLAPSED = new Set(['Declined by Nikki Beach', 'Lost (Nikki Beach)', 'Nikki Beach: Do Not Engage (Fraud)']);
+const nbTitle = (s) => s.toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase());
+function nbGroup(status) {
+  const i = NB_STATUS_ORDER.indexOf(status); const order = 500 + (i < 0 ? 50 : i);
+  if (status === 'DECLINED') return ['Declined by Nikki Beach', '#e5532e', order];
+  if (status === 'LOST') return ['Lost (Nikki Beach)', '#b4503a', order];
+  if (status === 'DO NOT ENGAGE - FRAUD') return ['Nikki Beach: Do Not Engage (Fraud)', '#7a1f12', order];
+  if (status === 'SIGNED') return ['Nikki Beach: Signed', '#2e9e5b', order];
+  return [`Nikki Beach: ${nbTitle(status)}`, status.startsWith('ON HOLD') ? '#7d7a8c' : '#2f8596', order];
+}
+const nbPill = (s) => h('span', { class: 'pill', style: { whiteSpace: 'nowrap', ...(NB_RED.has(s) ? { background: '#fde9e2', color: '#9a2f14', borderColor: '#e5532e' } : {}) } }, s === 'DECLINED' ? 'Declined by Nikki Beach' : nbTitle(s));
+const AIRTABLE_COLS = ['Status', 'Type', 'Country', 'City', 'Initial contact made', 'Source', 'Introducer', 'Short Intro', 'Remarks', 'Next Steps', 'Deadline', 'Company', 'Contacts', 'Assigned To'];
+function airtableCell(l, title) {
+  const t = ((l.airtable?.columns || []).find(x => x.title === title)?.text || '').trim();
+  if (!t) return h('td', { class: 'muted' }, '');
+  if (title === 'Status') return h('td', {}, nbPill(t));
+  if (title === 'Type') return h('td', {}, h('span', { class: 'pill', style: { whiteSpace: 'nowrap' } }, t));
+  if (title === 'Initial contact made' || title === 'Deadline') return h('td', { class: 'small', style: { whiteSpace: 'nowrap' } }, fmt.date(t));
+  if (['Short Intro', 'Remarks', 'Next Steps'].includes(title)) return h('td', { class: 'small', title: t, style: { minWidth: '240px', maxWidth: '340px' } }, t.length > 140 ? t.slice(0, 140) + '…' : t);
+  return h('td', { class: 'small', style: { whiteSpace: 'nowrap' } }, t);
+}
+// 10/14 Austin: everything Nikki Beach's Airtable says about this project, read-only (synced every 15 min)
+function airtableCard(lead) {
+  const a = lead.airtable; if (!a) return null;
+  const rows = a.columns.filter(c => c.text && c.title !== 'Internal notes');
+  const notes = a.columns.find(c => c.title === 'Internal notes')?.text;
+  return h('div', { class: 'card pad' }, h('div', { class: 'eyebrow', style: { marginBottom: '10px' } }, 'Nikki Beach Airtable'),
+    h('div', { style: { marginBottom: '10px' } }, nbPill(a.status)),
+    h('dl', { class: 'kv' }, rows.filter(c => c.title !== 'Status').flatMap(c => [h('dt', {}, c.title), h('dd', { class: 'small', style: { whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', minWidth: 0 } }, c.text)])),
+    notes ? h('details', { style: { marginTop: '8px' } }, h('summary', { class: 'small' }, 'Internal notes'), h('div', { class: 'small', style: { whiteSpace: 'pre-wrap', maxHeight: '320px', overflow: 'auto' } }, notes)) : null,
+    a.attachments ? h('div', { class: 'small muted', style: { marginTop: '8px' } }, `${a.attachments} attachment${a.attachments > 1 ? 's' : ''} in Airtable`) : null);
+}
 function viewPipeline(main) {
   const f = state.filters;
   const search = h('input', { 'data-keep': '1', class: 'input', style: { maxWidth: '420px' }, placeholder: 'Search properties, addresses, brokers, notes…', value: f.q, oninput: (e) => { f.q = e.target.value; draw(); } });
@@ -230,25 +265,35 @@ function viewPipeline(main) {
   main.append(topbar('Overview', 'Same groups and columns as the Monday Properties board, plus how hot or cold each lead is.', h('a', { class: 'btn', href: '/api/export/pipeline.csv' }, 'Export CSV'), h('button', { class: 'btn primary', 'data-keep': '1', onclick: () => newLeadModal() }, '+ New lead')), h('div', { class: 'filters' }, search), wrap);
   function draw() {
     let ls = state.leads;
-    if (f.q) { const s = f.q.toLowerCase(); ls = ls.filter(l => [l.name, l.ref, l.address, ...(l.monday?.columns || []).map(c => c.text)].join(' ').toLowerCase().includes(s)); }
+    if (f.q) { const s = f.q.toLowerCase(); ls = ls.filter(l => [l.name, l.ref, l.address, ...(l.monday?.columns || []).map(c => c.text), ...(l.airtable?.columns || []).map(c => c.text)].join(' ').toLowerCase().includes(s)); }
     const groups = new Map();
     // 9/30 Austin: handed-off and declined properties drop out of their area group into two groups at the bottom
-    const bucket = (l) => l.declined_at ? ['Declined', '#e5532e', 2000] : l.handed_off_at ? ['Handed Off', '#7d7a8c', 1000] : [l.monday?.group || 'Not on Monday yet', l.monday?.group_color || 'var(--muted)', l.monday?.group_order ?? 99];
-    for (const l of [...ls].sort((a, b) => (bucket(a)[2] - bucket(b)[2]) || ((a.monday?.item_order ?? 999) - (b.monday?.item_order ?? 999)))) {
+    // 10/14 Austin: Nikki Beach's own Airtable projects get groups by THEIR status, so what Nikki Beach declined is obvious
+    const bucket = (l) => l.declined_at ? ['Declined', '#e5532e', 2000] : l.handed_off_at ? ['Handed Off', '#7d7a8c', 1000]
+      : (l.airtable && !l.monday) ? nbGroup(l.airtable.status)
+      : [l.monday?.group || 'Not on Monday yet', l.monday?.group_color || 'var(--muted)', l.monday?.group_order ?? 99];
+    for (const l of [...ls].sort((a, b) => (bucket(a)[2] - bucket(b)[2]) || ((a.monday?.item_order ?? a.airtable?.item_order ?? 999) - (b.monday?.item_order ?? b.airtable?.item_order ?? 999)))) {
       const [g, gc] = bucket(l);
       if (!groups.has(g)) groups.set(g, { color: gc, leads: [] });
       groups.get(g).leads.push(l);
     }
-    wrap.replaceChildren(...(groups.size ? [...groups].map(([g, { color, leads }]) => { const box = h('div', { class: 'card wide-scroll', style: { borderLeft: `4px solid ${color}` } }); const slide = (d) => box.scrollBy({ left: d * box.clientWidth * 0.7, behavior: 'smooth' }); return h('div', { style: { marginBottom: '28px' } },
+    wrap.replaceChildren(...(groups.size ? [...groups].map(([g, { color, leads }]) => { const box = h('div', { class: 'card wide-scroll', style: { borderLeft: `4px solid ${color}` } }); const slide = (d) => box.scrollBy({ left: d * box.clientWidth * 0.7, behavior: 'smooth' });
+      const nb = leads.every(l => l.airtable && !l.monday);                 // a Nikki Beach Airtable group: their columns, not Monday's
+      const collapsible = nb && NB_COLLAPSED.has(g); const open = !collapsible || state.nbOpen?.[g] || f.q;
+      const cols = nb ? AIRTABLE_COLS : MONDAY_COLS; const cell = nb ? airtableCell : mondayCell;
+      if (!open) box.style.display = 'none';
+      return h('div', { style: { marginBottom: '28px' } },
       h('div', { style: { display: 'flex', alignItems: 'flex-end', gap: '14px', margin: '0 0 10px' } }, h('h3', { style: { color, margin: 0 } }, g), h('span', { class: 'small muted' }, `${leads.length} propert${leads.length > 1 ? 'ies' : 'y'}`),
+        collapsible ? h('button', { class: 'btn sm', 'data-keep': '1', onclick: () => { state.nbOpen = { ...(state.nbOpen || {}), [g]: !open }; draw(); } }, open ? 'Hide' : `Show all ${leads.length}`) : null,
         h('span', { style: { marginLeft: 'auto' } }, groupMap(leads, color))),   // area map on the right; More columns buttons removed 9/30 (the scrollbar stays)
       (box.append(h('table', { class: 'table' },
-        h('thead', {}, h('tr', {}, h('th', {}, 'Property'), h('th', { style: { whiteSpace: 'nowrap' } }, 'Date added'), h('th', {}, 'Hot / cold'), MONDAY_COLS.map(c => h('th', { style: { whiteSpace: 'nowrap' } }, c)))),
+        h('thead', {}, h('tr', {}, h('th', {}, 'Property'), h('th', { style: { whiteSpace: 'nowrap' } }, 'Date added'), h('th', {}, 'Hot / cold'), nb ? null : h('th', { style: { whiteSpace: 'nowrap' } }, 'Nikki Beach status'), cols.map(c => h('th', { style: { whiteSpace: 'nowrap' } }, c)))),
         h('tbody', {}, leads.map(l => h('tr', { class: l.declined_at ? 'handed-off-row declined-row' : l.handed_off_at ? 'handed-off-row' : '', onclick: () => navigate(`/lead/${l.id}`) },
           h('td', { style: { minWidth: '200px' } }, h('div', { class: 'lead-name' }, l.name, isNewListing(l) ? h('span', { class: 'new-listing' }, 'New listing') : null), h('div', { class: 'lead-loc' }, l.ref)),
           h('td', { class: 'small', style: { whiteSpace: 'nowrap' } }, fmt.date(dateAdded(l))),
           h('td', { style: { minWidth: '110px' } }, h('span', { class: `temp ${l.temperature}` }, l.temperature), h('div', { style: { marginTop: '6px' } }, heatBar(l))),
-          MONDAY_COLS.map(c => mondayCell(l, c)),
+          nb ? null : h('td', {}, l.airtable ? nbPill(l.airtable.status) : ''),
+          cols.map(c => cell(l, c)),
         ))))), box)); })
       : [h('div', { class: 'empty' }, h('h3', {}, 'No matches'), 'Clear the search or add a lead.')]));
   }
@@ -662,6 +707,7 @@ async function viewLead(main, id, tab) {
   ));
   const tabs = [['overview', 'Overview'], ['score', 'Scorecard'], ['checklist', 'Winner / loser'], ['sitepack', 'Site pack'], ['people', `People (${lead.contacts.length + lead.orgs.length})`], ['activity', `To do & activity (${((lead.checklist || {}).tasks || []).filter(t => !t.done).length} open)`], ['documents', `Documents (${lead.documents.length})`], ['terms', 'Terms']];
   const tabsEl = h('div', { class: 'tabs' }, tabs.map(([k, l]) => h('button', { class: k === tab ? 'active' : '', onclick: () => navigate(`/lead/${id}/${k}`) }, l)));
+  if (NB_RED.has(lead.airtable?.status)) setTimeout(() => main.querySelector('.detail-head')?.after(h('div', { class: 'handoff-banner declined' }, `${lead.airtable.status === 'DECLINED' ? 'Declined by Nikki Beach' : nbTitle(lead.airtable.status)} in their own Airtable CRM. Check with Peter before spending time here.`)), 0);
   if (lead.handed_off_at) setTimeout(() => { main.classList.add('handed-off'); main.querySelector('.detail-head')?.after(h('div', { class: 'handoff-banner' }, `Handed off to ${lead.handed_off_to || 'Nikki Beach'} on ${fmt.date(lead.handed_off_at)}.`)); }, 0);
   else if (lead.declined_at) setTimeout(() => { main.classList.add('handed-off'); main.querySelector('.detail-head')?.after(h('div', { class: 'handoff-banner declined' }, `Declined on ${fmt.date(lead.declined_at)}. This property was passed on and is no longer being pursued.`)); }, 0);
   const body = h('div', {});
@@ -669,6 +715,7 @@ async function viewLead(main, id, tab) {
     h('label', { class: 'gate-row' }, h('input', { type: 'checkbox', checked: !!lead.gates[lead.stage], onchange: (e) => save({ gates: { ...lead.gates, [lead.stage]: e.target.checked }, touch: false }) }), h('span', {}, st?.gate || '')),
     h('div', { class: 'small muted', style: { marginTop: '8px' } }, 'Default next action: ', st?.next || ''));
   const side = h('div', { class: 'side' },
+    airtableCard(lead),
     photoCard(lead),
     miniMap(lead),
     docsCard(lead, reload),
