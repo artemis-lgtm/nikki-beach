@@ -64,6 +64,12 @@ const ring = (lead, lg = false) => h('div', { class: `ring${lg ? ' lg' : ''}`, s
 const temp = (t) => h('span', { class: `temp ${t}` }, t);
 const gradeChip = (l) => h('span', { class: 'grade', style: { '--g': gradeColor[l.grade?.[0]] || 'var(--dead)', '--t': tempColor[l.temperature] }, title: `Fit letter ${l.grade?.[0]} (${l.fit_score}%) · heat digit ${l.grade?.[1]} (${l.heat_score}) · ${l.temperature}${l.temperature_reason ? `: ${l.temperature_reason}` : ''}` }, h('b', {}, l.grade?.[0]), h('i', {}, l.grade?.[1]));
 const heatBar = (l) => h('div', { class: 'heat', title: `Heat ${l.heat_score}/100: ${l.temperature}` }, h('i', { style: { width: `${Math.min(100, l.heat_score)}%`, background: tempColor[l.temperature] } }));
+// Peter 10/14: hot/warm/cold is editable. Picking one sets temperature_override; "Auto" clears it and the score decides again.
+const tempPicker = (l, after) => h('select', { class: `temp temp-pick ${l.temperature}`, 'data-keep': '1', title: l.temperature_override ? 'Set by hand. Pick Auto to let the score decide.' : `Scored: ${l.temperature_reason || l.temperature}. Pick one to set it by hand.`,
+  onclick: (ev) => ev.stopPropagation(),
+  onchange: async (ev) => { try { await api(`/api/leads/${l.id}`, { method: 'PATCH', body: { temperature_override: ev.target.value, touch: false } }); await refreshLeads(); toast('Saved'); after ? after() : render(); } catch (err) { toast(err.message, true); } } },
+  h('option', { value: '', selected: !l.temperature_override }, l.temperature_override ? 'Auto' : `${l.temperature} (auto)`),
+  ['hot', 'warm', 'cold', 'dead'].map(t => h('option', { value: t, selected: l.temperature_override === t }, t)));
 const navigate = (path) => { location.hash = path; };
 const escapeHtml = (s) => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 // Eastern calendar date, not UTC: after ~8pm ET the UTC date is already tomorrow.
@@ -301,7 +307,7 @@ function viewPipeline(main) {
         h('tbody', {}, leads.map(l => h('tr', { class: l.declined_at ? 'handed-off-row declined-row' : l.handed_off_at ? 'handed-off-row' : '', onclick: () => navigate(`/lead/${l.id}`) },
           h('td', { style: { minWidth: '200px' } }, h('div', { class: 'lead-name' }, l.name, isNewListing(l) ? h('span', { class: 'new-listing' }, 'New listing') : null), h('div', { class: 'lead-loc' }, l.ref)),
           h('td', { class: 'small', style: { whiteSpace: 'nowrap' } }, fmt.date(dateAdded(l))),
-          h('td', { style: { minWidth: '110px' } }, h('span', { class: `temp ${l.temperature}` }, l.temperature), h('div', { style: { marginTop: '6px' } }, heatBar(l))),
+          h('td', { style: { minWidth: '110px' } }, tempPicker(l), h('div', { style: { marginTop: '6px' } }, heatBar(l))),
           nb ? null : h('td', {}, l.airtable ? nbPill(l.airtable.status) : ''),
           cols.map(c => cell(l, c)),
         ))))), box)); })
@@ -703,7 +709,7 @@ async function viewLead(main, id, tab) {
   const head = h('div', { class: 'detail-head' }, ring(lead, true), h('div', { style: { flex: 1 } },
     h('div', { class: 'eyebrow' }, `${lead.ref} · ${formatLabel(lead.format)} · ${[lead.city, lead.country].filter(Boolean).join(', ')} · Tier ${lead.tier}`),
     h('h1', {}, lead.name),
-    h('div', { class: 'meta' }, gradeChip(lead), h('span', { class: `temp ${lead.temperature}`, title: lead.temperature_reason }, lead.temperature), h('span', { class: 'pill' }, `${stageLabel(lead.stage)} · ${lead.days_in_stage}d`), lead.registered ? h('span', { class: 'pill ok' }, `Registered ${fmt.date(lead.registered_at)}`)  : null, lead.status !== 'active' ? h('span', { class: 'pill bad' }, lead.status) : null, lead.score.knockouts.map(k => h('span', { class: 'pill bad', title: k.precedent }, `KO: ${k.label}`)), lead.score.fit.unknown_knockouts.length ? h('span', { class: 'pill warn', title: lead.score.fit.unknown_knockouts.map(k => k.label).join('; ') }, `${lead.score.fit.unknown_knockouts.length} knock-outs unverified`) : null, lead.score.rotten ? h('span', { class: 'pill bad' }, `rotting: ${lead.score.idleDays}d without inbound`) : null,
+    h('div', { class: 'meta' }, gradeChip(lead), tempPicker(lead, () => reload()), h('span', { class: 'pill' }, `${stageLabel(lead.stage)} · ${lead.days_in_stage}d`), lead.registered ? h('span', { class: 'pill ok' }, `Registered ${fmt.date(lead.registered_at)}`)  : null, lead.status !== 'active' ? h('span', { class: 'pill bad' }, lead.status) : null, lead.score.knockouts.map(k => h('span', { class: 'pill bad', title: k.precedent }, `KO: ${k.label}`)), lead.score.fit.unknown_knockouts.length ? h('span', { class: 'pill warn', title: lead.score.fit.unknown_knockouts.map(k => k.label).join('; ') }, `${lead.score.fit.unknown_knockouts.length} knock-outs unverified`) : null, lead.score.rotten ? h('span', { class: 'pill bad' }, `rotting: ${lead.score.idleDays}d without inbound`) : null,
       h('button', { class: 'btn sm', 'data-keep': '1', onclick: () => { document.body.append(onePager(lead)); window.print(); setTimeout(() => $('.onepager')?.remove(), 500); } }, 'Download report'),
       h('button', { class: `btn sm${lead.handed_off_at ? '' : ' primary'}`, 'data-keep': '1', title: lead.handed_off_at ? 'Bring this property back into play' : 'Nikki Beach takes it from here; the page greys out', onclick: async () => {
         if (lead.handed_off_at) { await save({ handed_off_at: null, handed_off_to: null, touch: false }, true); return render(); }

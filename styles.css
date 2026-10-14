@@ -421,3 +421,7 @@ a.btn { text-decoration: none; }
 .marker.nbx::after { transform: translate(-50%, -50%) rotate(-45deg); }
 .marker.nblive { width: 14px; height: 14px; border-radius: 50%; background: #fff; border: 4px solid #2f8596; }
 .marker.approx { opacity: .55; }
+/* Peter 10/14: the hot/cold pill is a dropdown so the team can set it by hand */
+select.temp-pick { appearance: none; -webkit-appearance: none; border: 0; cursor: pointer; font-family: inherit; padding-right: 20px; background-image: linear-gradient(45deg, transparent 50%, currentColor 50%), linear-gradient(135deg, currentColor 50%, transparent 50%); background-position: calc(100% - 10px) 50%, calc(100% - 6px) 50%; background-size: 4px 4px; background-repeat: no-repeat; }
+select.temp-pick.hot { background-color: var(--hot-bg); } select.temp-pick.warm { background-color: var(--warm-bg); } select.temp-pick.cold { background-color: var(--cold-bg); } select.temp-pick.dead { background-color: var(--dead-bg); }
+select.temp-pick option { color: #111; background: #fff; text-transform: uppercase; }
