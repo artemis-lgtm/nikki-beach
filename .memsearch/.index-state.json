@@ -1,0 +1,18 @@
+{
+  "collection": "ms_nikki_beach_pages_4d1274e1",
+  "failed_files": [],
+  "indexed_chunks": 1,
+  "indexed_files": 1,
+  "last_completed_at": "2026-10-14T17:41:38.418481Z",
+  "last_started_at": "2026-10-14T17:41:36.234316Z",
+  "last_success_at": "2026-10-14T17:41:38.418481Z",
+  "milvus_uri": "~/.memsearch/milvus.db",
+  "operation": "index",
+  "paths": [
+    "/Users/artemis/projects/nikki-beach-pages/.memsearch/memory"
+  ],
+  "schema_version": 1,
+  "status": "ok",
+  "total_files": 1,
+  "updated_at": "2026-10-14T17:41:38.418481Z"
+}

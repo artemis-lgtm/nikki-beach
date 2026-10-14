@@ -330,10 +330,12 @@ function gateModal(lead, stageKey, info) {
 // ---------- Map
 function viewMap(main) {
   // 9/30 Austin: every legend item toggles its markers on and off (remembered while the app is open)
-  const on = state.mapLayers || (state.mapLayers = { areas: true, hot: true, warm: true, cold: true, open: true, closed: true, lucia: true, concepts: true });
+  const on = state.mapLayers || (state.mapLayers = { areas: true, hot: true, warm: true, cold: true, open: true, closed: true, lucia: true, concepts: true, nb_live: true, nb_declined: true });
   if (on.areas === undefined) on.areas = true;
+  if (on.nb_live === undefined) { on.nb_live = true; on.nb_declined = true; }
   const items = [['areas', 'Search areas', { background: 'rgba(233,77,140,.25)', border: '2px dashed #e94d8c' }], ['hot', 'hot', { background: tempColor.hot }], ['warm', 'warm', { background: tempColor.warm }], ['cold', 'cold', { background: tempColor.cold }],
-    ['open', 'Nikki Beach open / announced', { background: '#16151f', borderRadius: '2px' }], ['closed', 'Nikki Beach closed', { background: '#fff', border: '2px solid #16151f', borderRadius: '2px' }], ['lucia', 'Lucia', { background: '#e9a23b', borderRadius: '2px' }], ['concepts', 'Cocktail Club / Maison Mer', { background: '#2f8596', borderRadius: '2px' }]];
+    ['open', 'Nikki Beach open / announced', { background: '#16151f', borderRadius: '2px' }], ['closed', 'Nikki Beach closed', { background: '#fff', border: '2px solid #16151f', borderRadius: '2px' }], ['lucia', 'Lucia', { background: '#e9a23b', borderRadius: '2px' }], ['concepts', 'Cocktail Club / Maison Mer', { background: '#2f8596', borderRadius: '2px' }],
+    ['nb_live', 'Nikki Beach reviewing', { background: '#fff', border: '3px solid #2f8596' }], ['nb_declined', 'Declined by Nikki Beach', { background: '#e5532e', borderRadius: '2px' }]];
   const layers = {};
   const legend = h('div', { class: 'map-legend', style: { justifyContent: 'center' } }, items.map(([k, label, sw]) => h('button', { class: `legend-toggle${on[k] ? ' on' : ''}`, 'data-keep': '1', 'aria-pressed': String(on[k]), onclick: (e) => {
     on[k] = !on[k]; e.currentTarget.classList.toggle('on', on[k]); e.currentTarget.setAttribute('aria-pressed', String(on[k]));
@@ -353,7 +355,14 @@ function viewMap(main) {
   const icon = (cls) => L.divIcon({ className: '', html: `<div class="marker ${cls}"></div>`, iconSize: [18, 18], iconAnchor: [9, 9] });
   for (const f of state.footprint) if (f.lat && f.lng) { const k = /^Lucia\b/.test(f.name) ? 'lucia' : /Cocktail Club|Maison Mer/.test(f.name) ? 'concepts' : f.status === 'closed' ? 'closed' : 'open'; L.marker([f.lat, f.lng], { icon: icon(`fp ${k === 'open' ? '' : k}`), zIndexOffset: k === 'lucia' || k === 'concepts' ? 300 : 0 }).addTo(layers[k]).bindPopup(`<b>${escapeHtml(f.name)}</b><br>${escapeHtml(f.country || '')} · ${escapeHtml(fmt.title(f.format))} · ${escapeHtml(f.status)}${f.opened ? ` · ${f.opened}${f.closed ? `–${f.closed}` : ''}` : ''}${f.outcome ? `<br><span style="color:#6a6a6a">${escapeHtml(f.outcome)}</span>` : ''}`) }
 
-  for (const l of state.leads) if (l.lat && l.lng && l.status === 'active' && layers[l.temperature]) L.marker([l.lat, l.lng], { icon: icon(l.temperature), zIndexOffset: 500 }).addTo(layers[l.temperature]).bindPopup(`<b>${escapeHtml(l.name)}</b><br>${escapeHtml(l.address || l.country || '')}<br><a href="#/lead/${l.id}">Open lead →</a>`);
+  // 10/14 Austin: every Nikki Beach Airtable project gets a pin, declined ones included, so a site we like can be checked against what they already turned down
+  for (const l of state.leads) if (l.lat && l.lng && l.airtable && !l.monday) {
+    const dead = NB_RED.has(l.airtable.status); const approx = l.geo_precision === 'city';
+    const col = Object.fromEntries(l.airtable.columns.map(c => [c.title, c.text]));
+    L.marker([l.lat, l.lng], { icon: icon(`${dead ? 'nbx' : 'nblive'}${approx ? ' approx' : ''}`), zIndexOffset: dead ? 100 : 400 }).addTo(layers[dead ? 'nb_declined' : 'nb_live'])
+      .bindPopup(`<b>${escapeHtml(l.name)}</b><br><span style="color:${dead ? '#c2401f' : '#2f8596'};font-weight:600">${escapeHtml(l.airtable.status === 'DECLINED' ? 'Declined by Nikki Beach' : nbTitle(l.airtable.status))}</span>${col['Initial contact made'] ? ` · first contact ${escapeHtml(fmt.date(col['Initial contact made']))}` : ''}<br>${escapeHtml([col.City, col.Country].filter(Boolean).join(', '))}${col.Remarks ? `<br><i>${escapeHtml(col.Remarks.slice(0, 160))}</i>` : ''}${approx ? '<br><span class="small muted">Pin is the city, not the exact site</span>' : ''}<br><a href="#/lead/${l.id}">Open lead</a>`);
+  }
+  for (const l of state.leads) if (l.lat && l.lng && l.status === 'active' && layers[l.temperature] && !(l.airtable && !l.monday)) L.marker([l.lat, l.lng], { icon: icon(l.temperature), zIndexOffset: 500 }).addTo(layers[l.temperature]).bindPopup(`<b>${escapeHtml(l.name)}</b><br>${escapeHtml(l.address || l.country || '')}<br><a href="#/lead/${l.id}">Open lead →</a>`);
   for (const [k] of items) if (on[k]) layers[k].addTo(map);
   setTimeout(() => map.invalidateSize(), 50);
 
@@ -707,6 +716,13 @@ async function viewLead(main, id, tab) {
   ));
   const tabs = [['overview', 'Overview'], ['score', 'Scorecard'], ['checklist', 'Winner / loser'], ['sitepack', 'Site pack'], ['people', `People (${lead.contacts.length + lead.orgs.length})`], ['activity', `To do & activity (${((lead.checklist || {}).tasks || []).filter(t => !t.done).length} open)`], ['documents', `Documents (${lead.documents.length})`], ['terms', 'Terms']];
   const tabsEl = h('div', { class: 'tabs' }, tabs.map(([k, l]) => h('button', { class: k === tab ? 'active' : '', onclick: () => navigate(`/lead/${id}/${k}`) }, l)));
+  // 10/14 Austin: a site we found ourselves gets checked against Nikki Beach's own pipeline (exact/address/site pins within 400 m)
+  if (!lead.airtable && lead.lat && lead.lng) {
+    const km = (a, b) => { const r = Math.PI / 180, x = Math.sin((b.lat - a.lat) * r / 2) ** 2 + Math.cos(a.lat * r) * Math.cos(b.lat * r) * Math.sin((b.lng - a.lng) * r / 2) ** 2; return 12742 * Math.asin(Math.sqrt(x)); };
+    const seen = state.leads.filter(o => o.airtable && !o.monday && o.lat && o.lng && o.geo_precision !== 'city' && km(lead, o) < 0.4);
+    if (seen.length) setTimeout(() => main.querySelector('.detail-head')?.after(h('div', { class: 'handoff-banner declined' }, 'Nikki Beach already has this area in their own CRM: ',
+      seen.map((o, i) => [i ? ' · ' : '', h('a', { href: `#/lead/${o.id}` }, o.name), ` (${o.airtable.status === 'DECLINED' ? 'declined' : nbTitle(o.airtable.status)}, ${Math.round(km(lead, o) * 1000)} m away)`]))), 0);
+  }
   if (NB_RED.has(lead.airtable?.status)) setTimeout(() => main.querySelector('.detail-head')?.after(h('div', { class: 'handoff-banner declined' }, `${lead.airtable.status === 'DECLINED' ? 'Declined by Nikki Beach' : nbTitle(lead.airtable.status)} in their own Airtable CRM. Check with Peter before spending time here.`)), 0);
   if (lead.handed_off_at) setTimeout(() => { main.classList.add('handed-off'); main.querySelector('.detail-head')?.after(h('div', { class: 'handoff-banner' }, `Handed off to ${lead.handed_off_to || 'Nikki Beach'} on ${fmt.date(lead.handed_off_at)}.`)); }, 0);
   else if (lead.declined_at) setTimeout(() => { main.classList.add('handed-off'); main.querySelector('.detail-head')?.after(h('div', { class: 'handoff-banner declined' }, `Declined on ${fmt.date(lead.declined_at)}. This property was passed on and is no longer being pursued.`)); }, 0);

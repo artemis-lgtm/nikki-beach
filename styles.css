@@ -415,3 +415,9 @@ a.btn { text-decoration: none; }
 .area-pop input, .area-pop textarea { width: 100%; box-sizing: border-box; font: inherit; font-size: 13px; padding: 6px 8px; border: 1px solid var(--border-strong); border-radius: 6px; color: var(--ink); background: rgba(255,255,255,.06); }
 .area-list { margin-top: 14px; }
 .area-list tr { cursor: pointer; }
+/* 10/14 Austin: Nikki Beach's own Airtable projects on the map. Red X = they already declined / lost it. */
+.marker.nbx { width: 16px; height: 16px; border-radius: 3px; background: #e5532e; border: 2px solid #fff; position: relative; }
+.marker.nbx::before, .marker.nbx::after { content: ''; position: absolute; left: 50%; top: 50%; width: 10px; height: 2px; background: #fff; transform: translate(-50%, -50%) rotate(45deg); }
+.marker.nbx::after { transform: translate(-50%, -50%) rotate(-45deg); }
+.marker.nblive { width: 14px; height: 14px; border-radius: 50%; background: #fff; border: 4px solid #2f8596; }
+.marker.approx { opacity: .55; }
