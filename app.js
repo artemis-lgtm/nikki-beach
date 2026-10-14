@@ -136,6 +136,7 @@ const NAV = [
   ['sep'], ['/people', 'People'], ['/brand', 'Brand library'], ['/review', 'Weekly review'], ['/playbook', 'Playbook'], ['/markets', 'Markets'],
 ];
 function render() {
+  dropMaps();
   state.route = location.hash.replace(/^#/, '') || '/';
   const app = $('#app');
   app.className = 'app';
@@ -206,18 +207,25 @@ function mondayCell(l, title) {
   return h('td', { class: 'small', style: { whiteSpace: title === 'Address' ? 'normal' : 'nowrap', minWidth: title === 'Address' ? '200px' : '' } }, t);
 }
 // 9/30 Austin: a small square map above each Overview group showing that area; click it to open the Map page zoomed there.
+// 10/14 Austin (lag): every Leaflet map the app makes is torn down on the next redraw, or they pile up in memory
+const liveMaps = new Set(), liveObservers = new Set();
+function dropMaps() { for (const io of liveObservers) io.disconnect(); liveObservers.clear(); for (const m of liveMaps) try { m.remove(); } catch {} liveMaps.clear(); }
 function groupMap(leads, color) {
   const pts = leads.filter(l => l.lat && l.lng).map(l => [l.lat, l.lng]);
   if (!pts.length || typeof L === 'undefined') return null;
   const el = h('div', { class: 'group-map', title: 'Open on the map', 'data-keep': '1', onclick: () => { state.mapFocus = pts; navigate('/map'); } });
   const wrap = h('div', { class: 'group-map-wrap', onclick: () => { state.mapFocus = pts; navigate('/map'); } }, el,
     h('span', { class: 'show-on-map' }, h('span', { style: { display: 'inline-flex' }, html: '<svg viewBox="0 0 24 24" width="14" height="14"><path d="M12 2a7 7 0 0 0-7 7c0 5.2 7 13 7 13s7-7.8 7-13a7 7 0 0 0-7-7zm0 9.5A2.5 2.5 0 1 1 12 6.5a2.5 2.5 0 0 1 0 5z" fill="currentColor"/></svg>' }), 'Show on map'));
-  setTimeout(() => {
-    const m = L.map(el, { zoomControl: false, attributionControl: false, dragging: false, scrollWheelZoom: false, doubleClickZoom: false, boxZoom: false, keyboard: false, touchZoom: false });
+  const init = () => {
+    const m = L.map(el, { trackResize: false, fadeAnimation: false, zoomAnimation: false, zoomControl: false, attributionControl: false, dragging: false, scrollWheelZoom: false, doubleClickZoom: false, boxZoom: false, keyboard: false, touchZoom: false });
     L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 18 }).addTo(m);
     for (const l of leads) if (l.lat && l.lng) L.circleMarker([l.lat, l.lng], { radius: 5, color: '#fff', weight: 2, fillColor: color.startsWith('#') ? color : '#2f8596', fillOpacity: 1, interactive: false }).addTo(m);
     pts.length > 1 ? m.fitBounds(pts, { padding: [18, 18], maxZoom: 14 }) : m.setView(pts[0], 13);
-  }, 30);
+    liveMaps.add(m);
+  };
+  // 10/14 Austin (lag): a group's little map is only built when it scrolls into view
+  const io = new IntersectionObserver((es) => { if (es.some(e => e.isIntersecting)) { io.disconnect(); liveObservers.delete(io); init(); } }, { rootMargin: '300px' });
+  setTimeout(() => io.observe(el), 0); liveObservers.add(io);
   return wrap;
 }
 // Date a property went on the board (Monday's own timestamp), and the 10-day "New listing" badge (Austin 9/30)
@@ -260,10 +268,12 @@ function airtableCard(lead) {
 }
 function viewPipeline(main) {
   const f = state.filters;
-  const search = h('input', { 'data-keep': '1', class: 'input', style: { maxWidth: '420px' }, placeholder: 'Search properties, addresses, brokers, notes…', value: f.q, oninput: (e) => { f.q = e.target.value; draw(); } });
+  const search = h('input', { 'data-keep': '1', class: 'input', style: { maxWidth: '420px' }, placeholder: 'Search properties, addresses, brokers, notes…', value: f.q, oninput: (e) => { f.q = e.target.value; clearTimeout(searchT); searchT = setTimeout(draw, 160); } });   // 10/14 Austin (lag): redraw once typing pauses, not per keystroke
+  let searchT;
   const wrap = h('div', {});
   main.append(topbar('Overview', 'Same groups and columns as the Monday Properties board, plus how hot or cold each lead is.', h('a', { class: 'btn', href: '/api/export/pipeline.csv' }, 'Export CSV'), h('button', { class: 'btn primary', 'data-keep': '1', onclick: () => newLeadModal() }, '+ New lead')), h('div', { class: 'filters' }, search), wrap);
   function draw() {
+    dropMaps();
     let ls = state.leads;
     if (f.q) { const s = f.q.toLowerCase(); ls = ls.filter(l => [l.name, l.ref, l.address, ...(l.monday?.columns || []).map(c => c.text), ...(l.airtable?.columns || []).map(c => c.text)].join(' ').toLowerCase().includes(s)); }
     const groups = new Map();
@@ -286,7 +296,7 @@ function viewPipeline(main) {
       h('div', { style: { display: 'flex', alignItems: 'flex-end', gap: '14px', margin: '0 0 10px' } }, h('h3', { style: { color, margin: 0 } }, g), h('span', { class: 'small muted' }, `${leads.length} propert${leads.length > 1 ? 'ies' : 'y'}`),
         collapsible ? h('button', { class: 'btn sm', 'data-keep': '1', onclick: () => { state.nbOpen = { ...(state.nbOpen || {}), [g]: !open }; draw(); } }, open ? 'Hide' : `Show all ${leads.length}`) : null,
         h('span', { style: { marginLeft: 'auto' } }, groupMap(leads, color))),   // area map on the right; More columns buttons removed 9/30 (the scrollbar stays)
-      (box.append(h('table', { class: 'table' },
+      (open && box.append(h('table', { class: 'table' },
         h('thead', {}, h('tr', {}, h('th', {}, 'Property'), h('th', { style: { whiteSpace: 'nowrap' } }, 'Date added'), h('th', {}, 'Hot / cold'), nb ? null : h('th', { style: { whiteSpace: 'nowrap' } }, 'Nikki Beach status'), cols.map(c => h('th', { style: { whiteSpace: 'nowrap' } }, c)))),
         h('tbody', {}, leads.map(l => h('tr', { class: l.declined_at ? 'handed-off-row declined-row' : l.handed_off_at ? 'handed-off-row' : '', onclick: () => navigate(`/lead/${l.id}`) },
           h('td', { style: { minWidth: '200px' } }, h('div', { class: 'lead-name' }, l.name, isNewListing(l) ? h('span', { class: 'new-listing' }, 'New listing') : null), h('div', { class: 'lead-loc' }, l.ref)),
@@ -348,7 +358,7 @@ function viewMap(main) {
   const el = h('div', { class: 'map' });
   main.append(el);
   if (typeof L === 'undefined') { el.append(h('div', { class: 'empty' }, 'Map library did not load.')); return; }
-  const map = L.map(el, { worldCopyJump: true }).setView([25, 5], 2);
+  const map = L.map(el, { worldCopyJump: true }).setView([25, 5], 2); liveMaps.add(map);
   if (state.mapFocus) { const f = state.mapFocus; state.mapFocus = null; setTimeout(() => { map.invalidateSize(); f.length > 1 ? map.fitBounds(f, { padding: [60, 60], maxZoom: 15 }) : map.setView(f[0], 14); }, 80); }
   L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors', maxZoom: 18 }).addTo(map);
   for (const [k] of items) layers[k] = L.layerGroup();
