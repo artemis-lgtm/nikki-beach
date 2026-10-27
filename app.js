@@ -358,10 +358,16 @@ function viewMap(main) {
     on[k] = !on[k]; e.currentTarget.classList.toggle('on', on[k]); e.currentTarget.setAttribute('aria-pressed', String(on[k]));
     if (map) on[k] ? layers[k].addTo(map) : layers[k].remove();
   } }, h('i', { style: sw }), label)));
-  let dropping = false;
-  const dropBtn = h('button', { class: 'btn primary', 'data-keep': '1', onclick: () => setDropping(!dropping) }, '+ Drop a pin');
-  const hint = h('div', { class: 'map-hint', style: { display: 'none' } }, 'Click the map where you want someone to look. Then drag the white dot on the edge to make the circle bigger or smaller.');
-  main.append(topbar('Map', 'Candidate sites against the existing Nikki Beach footprint. Drop a pin to mark an area to search. Click a legend item to show or hide it.', dropBtn), legend, hint);
+  // 10/27 Peter: search areas can be a circle, a box (click and drag) or a hand-drawn shape (click the corners, double-click to finish)
+  let dropping = false;   // false | 'circle' | 'box' | 'shape'
+  const HINTS = { circle: 'Click the map where you want someone to look. Then drag the white dot on the edge to make the circle bigger or smaller.',
+    box: 'Click and drag on the map to draw the box. Drag any white corner afterwards to reshape it.',
+    shape: 'Click the map to place each corner of the area. Double-click (or click the first corner) to finish. Esc cancels.' };
+  const dropBtn = h('button', { class: 'btn primary', 'data-keep': '1', onclick: () => setDropping(dropping === 'circle' ? false : 'circle') }, '+ Circle');
+  const boxBtn = h('button', { class: 'btn primary', 'data-keep': '1', onclick: () => setDropping(dropping === 'box' ? false : 'box') }, '+ Box');
+  const shapeBtn = h('button', { class: 'btn primary', 'data-keep': '1', onclick: () => setDropping(dropping === 'shape' ? false : 'shape') }, '+ Draw shape');
+  const hint = h('div', { class: 'map-hint', style: { display: 'none' } }, '');
+  main.append(topbar('Map', 'Candidate sites against the existing Nikki Beach footprint. Mark an area to search with a circle, a box or a shape you draw. Click a legend item to show or hide it.', h('div', { class: 'row', style: { gap: '6px' } }, dropBtn, boxBtn, shapeBtn)), legend, hint);
   const el = h('div', { class: 'map' });
   main.append(el);
   if (typeof L === 'undefined') { el.append(h('div', { class: 'empty' }, 'Map library did not load.')); return; }
@@ -385,12 +391,45 @@ function viewMap(main) {
 
   // ---- Search areas (Austin 10/5): drop a pin, drag the edge dot to set the radius, name it and assign it.
   function setDropping(v) {
-    dropping = v; dropBtn.textContent = v ? 'Cancel' : '+ Drop a pin'; dropBtn.classList.toggle('primary', !v);
-    hint.style.display = v ? '' : 'none'; el.classList.toggle('dropping', v);
+    dropping = v; cancelSketch();
+    for (const [b, mode, label] of [[dropBtn, 'circle', '+ Circle'], [boxBtn, 'box', '+ Box'], [shapeBtn, 'shape', '+ Draw shape']]) { b.textContent = v === mode ? 'Cancel' : label; b.classList.toggle('primary', v !== mode); }
+    hint.textContent = v ? HINTS[v] : ''; hint.style.display = v ? '' : 'none'; el.classList.toggle('dropping', !!v);
+    if (v === 'box') map.dragging.disable(); else map.dragging.enable();
+    if (v === 'shape') map.doubleClickZoom.disable(); else map.doubleClickZoom.enable();
     if (v && !on.areas) { on.areas = true; layers.areas.addTo(map); legend.querySelector('.legend-toggle').classList.add('on'); }
   }
+  // ---- Box: press, drag, release.  Shape: click corners, double-click or click the first corner to finish.
+  let sketch = null;   // { start, rect } for box, { pts, line, dots } for shape
+  function cancelSketch() { if (!sketch) return; for (const l of [sketch.rect, sketch.line, ...(sketch.dots || [])]) if (l) layers.areas.removeLayer(l); sketch = null; }
+  const sketchStyle = { color: '#e94d8c', weight: 2, dashArray: '6 6', fillColor: '#e94d8c', fillOpacity: 0.12 };
+  async function createShape(type, pts) {
+    const c = centroid(pts);
+    try { const a = await api('/api/areas', { method: 'POST', body: { lat: c.lat, lng: c.lng, radius_m: Math.round(shapeRadius(pts, c)), shape: { type, points: pts.map(q => [q.lat, q.lng]) } } }); state.areas.push(a); const d = drawArea(a); d.pin.openPopup(); renderAreaList(); }
+    catch (err) { toast(err.message, true); }
+  }
+  map.on('mousedown', (e) => { if (dropping !== 'box') return; sketch = { start: e.latlng, rect: L.rectangle(L.latLngBounds(e.latlng, e.latlng), { ...sketchStyle, interactive: false }).addTo(layers.areas) }; });
+  map.on('mousemove', (e) => {
+    if (dropping === 'box' && sketch?.rect) sketch.rect.setBounds(L.latLngBounds(sketch.start, e.latlng));
+    if (dropping === 'shape' && sketch?.line) sketch.line.setLatLngs([...sketch.pts, e.latlng]);
+  });
+  map.on('mouseup', (e) => {
+    if (dropping !== 'box' || !sketch?.rect) return;
+    const b = L.latLngBounds(sketch.start, e.latlng); cancelSketch(); setDropping(false);
+    if (b.getNorthWest().distanceTo(b.getSouthEast()) < 30) { toast('Drag a little further to draw the box', true); return; }
+    createShape('box', [b.getNorthWest(), b.getNorthEast(), b.getSouthEast(), b.getSouthWest()]);
+  });
+  function finishShape() { const pts = sketch?.pts || []; cancelSketch(); setDropping(false); if (pts.length < 3) { toast('A shape needs at least three corners', true); return; } createShape('polygon', pts); }
+  map.on('dblclick', (e) => { if (dropping === 'shape' && sketch) { L.DomEvent.stop(e); finishShape(); } });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && dropping) setDropping(false); });
   map.on('click', async (e) => {
-    if (!dropping) return;
+    if (dropping === 'shape') {
+      if (!sketch) sketch = { pts: [], dots: [], line: L.polyline([], { color: '#e94d8c', weight: 2, dashArray: '6 6', interactive: false }).addTo(layers.areas) };
+      if (sketch.pts.length >= 3 && map.latLngToContainerPoint(sketch.pts[0]).distanceTo(map.latLngToContainerPoint(e.latlng)) < 14) { finishShape(); return; }
+      if (sketch.pts.length && map.latLngToContainerPoint(sketch.pts[sketch.pts.length - 1]).distanceTo(map.latLngToContainerPoint(e.latlng)) < 4) return;   // second click of a double-click
+      sketch.pts.push(e.latlng); sketch.dots.push(L.circleMarker(e.latlng, { radius: 5, color: '#e94d8c', fillColor: '#fff', fillOpacity: 1, weight: 2, interactive: false }).addTo(layers.areas));
+      sketch.line.setLatLngs(sketch.pts); return;
+    }
+    if (dropping !== 'circle') return;
     setDropping(false);
     const zoomedOut = map.getZoom() < 9;   // dropped from the world view: zoom in to the pin and start with a 3 km circle
     const b = map.getBounds(); const radius = zoomedOut ? 3000 : Math.round(Math.max(150, Math.min(50000, b.getNorthEast().distanceTo(b.getSouthWest()) / 12)));
@@ -403,7 +442,37 @@ function viewMap(main) {
   const pinIcon = L.divIcon({ className: '', html: '<div class="area-pin"></div>', iconSize: [22, 30], iconAnchor: [11, 29], popupAnchor: [0, -26] });
   const handleIcon = L.divIcon({ className: '', html: '<div class="area-handle" title="Drag to resize"></div>', iconSize: [18, 18], iconAnchor: [9, 9] });
   const edgeOf = (c, r) => { const lat = c.lat * Math.PI / 180; return L.latLng(c.lat, c.lng + (r / (111320 * Math.cos(lat)))); };
+  const centroid = (pts) => L.latLng(pts.reduce((t, q) => t + q.lat, 0) / pts.length, pts.reduce((t, q) => t + q.lng, 0) / pts.length);
+  const shapeRadius = (pts, c) => Math.max(50, ...pts.map(q => c.distanceTo(q)));
+  const shapeOf = (a) => { try { return a.shape_json ? JSON.parse(a.shape_json) : null; } catch { return null; } };
+  const sizeLabel = (a) => { const sh = shapeOf(a); if (!sh) return kmLabel(a.radius_m); const b = L.latLngBounds(sh.points); const w = b.getNorthWest().distanceTo(b.getNorthEast()), ht = b.getNorthWest().distanceTo(b.getSouthWest()); const k = (m) => m >= 1000 ? `${(m / 1000).toFixed(m >= 10000 ? 0 : 1)} km` : `${Math.round(m)} m`; return `${k(w)} × ${k(ht)}`; };
+  function drawShape(a, sh) {
+    let pts = sh.points.map(q => L.latLng(q[0], q[1]));
+    const poly = L.polygon(pts, { ...sketchStyle, interactive: false }).addTo(layers.areas);
+    const pin = L.marker(centroid(pts), { icon: pinIcon, draggable: true, zIndexOffset: 800, autoPan: true }).addTo(layers.areas);
+    const handles = pts.map((q, i) => L.marker(q, { icon: handleIcon, draggable: true, zIndexOffset: 900 }).addTo(layers.areas));
+    const persist = () => { const c = centroid(pts); a.lat = c.lat; a.lng = c.lng; save(a, { lat: c.lat, lng: c.lng, radius_m: Math.round(shapeRadius(pts, c)), shape: { type: sh.type, points: pts.map(q => [q.lat, q.lng]) } }); };
+    const redraw = () => { poly.setLatLngs(pts); handles.forEach((hd, i) => hd.setLatLng(pts[i])); pin.setLatLng(centroid(pts)); };
+    handles.forEach((hd, i) => {
+      hd.on('drag', () => {
+        const q = hd.getLatLng();
+        if (sh.type === 'box') {   // a box stays a box: the dragged corner moves, the two neighbours follow, the opposite corner stays put
+          const o = pts[(i + 2) % 4]; const b = L.latLngBounds(q, o);
+          pts = [b.getNorthWest(), b.getNorthEast(), b.getSouthEast(), b.getSouthWest()];
+          handles.forEach((x, j) => { if (j !== i) x.setLatLng(pts[j]); }); poly.setLatLngs(pts); pin.setLatLng(centroid(pts));
+        } else { pts[i] = q; poly.setLatLngs(pts); pin.setLatLng(centroid(pts)); }
+      });
+      hd.on('dragend', () => { redraw(); persist(); });
+    });
+    let from = null;
+    pin.on('dragstart', () => { from = pin.getLatLng(); });
+    pin.on('drag', () => { const c = pin.getLatLng(), dLat = c.lat - from.lat, dLng = c.lng - from.lng; from = c; pts = pts.map(q => L.latLng(q.lat + dLat, q.lng + dLng)); poly.setLatLngs(pts); handles.forEach((hd, i) => hd.setLatLng(pts[i])); });
+    pin.on('dragend', () => { persist(); pin.openPopup(); });
+    pin.bindPopup(() => areaPopup(a), { minWidth: 260 });
+    const d = { circle: poly, pin, handle: null, extra: handles }; drawn.set(a.id, d); return d;
+  }
   function drawArea(a) {
+    const sh = shapeOf(a); if (sh) return drawShape(a, sh);
     const center = L.latLng(a.lat, a.lng);
     const circle = L.circle(center, { radius: a.radius_m, color: '#e94d8c', weight: 2, dashArray: '6 6', fillColor: '#e94d8c', fillOpacity: 0.12, interactive: false }).addTo(layers.areas);
     const pin = L.marker(center, { icon: pinIcon, draggable: true, zIndexOffset: 800, autoPan: true }).addTo(layers.areas);
@@ -425,18 +494,18 @@ function viewMap(main) {
       h('div', { class: 'field' }, h('label', {}, 'Name'), h('input', { value: f.name, oninput: (e) => f.name = e.target.value, placeholder: 'e.g. Sunny Isles beachfront' })),
       h('div', { class: 'field' }, h('label', {}, 'Who should look'), h('input', { value: f.assigned_to, list: 'area-users', oninput: (e) => f.assigned_to = e.target.value, placeholder: 'employee or broker' }), h('datalist', { id: 'area-users' }, users.map(u => h('option', { value: u })))),
       h('div', { class: 'field' }, h('label', {}, 'What to look for'), h('textarea', { rows: 3, oninput: (e) => f.notes = e.target.value }, f.notes)),
-      h('div', { class: 'small muted', style: { margin: '2px 0 10px' } }, `Radius ${kmLabel(a.radius_m)} · drag the white dot to change it`),
+      h('div', { class: 'small muted', style: { margin: '2px 0 10px' } }, shapeOf(a) ? `${shapeOf(a).type === 'box' ? 'Box' : 'Shape'} about ${sizeLabel(a)} · drag the white corners to reshape, the pin to move it` : `Radius ${kmLabel(a.radius_m)} · drag the white dot to change it`),
       h('div', { class: 'row', style: { gap: '6px', flexWrap: 'wrap' } },
         h('button', { class: 'btn sm primary', onclick: async () => { await save(a, f); drawn.get(a.id)?.pin.closePopup(); toast('Saved'); } }, 'Save'),
         h('button', { class: 'btn sm', onclick: async () => { try { await save(a, f); const lead = await api('/api/leads', { method: 'POST', body: { name: f.name || 'New site', lat: a.lat, lng: a.lng, summary: f.notes || '' } }); await refreshLeads(); toast('Lead created'); navigate(`/lead/${lead.id}`); } catch (err) { toast(err.message, true); } } }, 'Make it a lead'),
-        h('button', { class: 'btn sm ghost danger', onclick: async () => { if (!confirm('Delete this search area?')) return; await api(`/api/areas/${a.id}`, { method: 'DELETE' }); const d = drawn.get(a.id); if (d) { layers.areas.removeLayer(d.circle); layers.areas.removeLayer(d.pin); layers.areas.removeLayer(d.handle); drawn.delete(a.id); } state.areas = state.areas.filter(x => x.id !== a.id); renderAreaList(); } }, 'Delete')));
+        h('button', { class: 'btn sm ghost danger', onclick: async () => { if (!confirm('Delete this search area?')) return; await api(`/api/areas/${a.id}`, { method: 'DELETE' }); const d = drawn.get(a.id); if (d) { for (const l of [d.circle, d.pin, d.handle, ...(d.extra || [])]) if (l) layers.areas.removeLayer(l); drawn.delete(a.id); } state.areas = state.areas.filter(x => x.id !== a.id); renderAreaList(); } }, 'Delete')));
   }
   const areaList = h('div', { class: 'card pad area-list' });
   function renderAreaList() {
     const list = state.areas || [];
     areaList.replaceChildren(h('div', { class: 'eyebrow', style: { marginBottom: '8px' } }, list.length ? `Search areas · ${list.length}` : 'Search areas'),
       list.length ? h('table', { class: 'table' }, h('tbody', {}, list.map(a => h('tr', { onclick: () => { const d = drawn.get(a.id); map.fitBounds(d.circle.getBounds(), { padding: [40, 40] }); d.pin.openPopup(); el.scrollIntoView({ behavior: 'smooth', block: 'center' }); } },
-        h('td', {}, h('div', { class: 'lead-name' }, a.name || 'New search area'), h('div', { class: 'lead-loc' }, a.notes || '')), h('td', {}, a.assigned_to || h('span', { class: 'muted' }, 'nobody yet')), h('td', { style: { whiteSpace: 'nowrap' } }, kmLabel(a.radius_m)))))) : h('div', { class: 'small muted' }, 'None yet. Press "+ Drop a pin" above the map, then click where you want someone to look.'));
+        h('td', {}, h('div', { class: 'lead-name' }, a.name || 'New search area'), h('div', { class: 'lead-loc' }, a.notes || '')), h('td', {}, a.assigned_to || h('span', { class: 'muted' }, 'nobody yet')), h('td', { style: { whiteSpace: 'nowrap' } }, sizeLabel(a)))))) : h('div', { class: 'small muted' }, 'None yet. Press "+ Circle", "+ Box" or "+ Draw shape" above the map to mark where someone should look.'));
   }
   main.append(areaList);
   (async () => { try { state.areas = await api('/api/areas'); } catch { state.areas = []; } for (const a of state.areas) drawArea(a); renderAreaList(); })();
