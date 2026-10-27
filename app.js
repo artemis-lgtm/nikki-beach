@@ -525,7 +525,7 @@ async function viewBrand(main) {
           h('a', { class: 'btn sm', href: `${d.url}?download=1`, 'data-keep': '1' }, 'Download')))))))) : [h('div', { class: 'empty' }, 'No brand documents yet.')]));
   };
   const brandIn = h('input', { class: 'input', 'data-keep': '1', placeholder: 'Brand (e.g. Casa Nikki)', style: { width: '240px' } });
-  const file = h('input', { type: 'file', multiple: true, style: { display: 'none' }, onchange: async (e) => {
+  const file = h('input', { type: 'file', multiple: true, 'data-keep': '1', style: { display: 'none' }, onchange: async (e) => {
     const files = [...e.target.files]; if (!files.length) return;
     try {
       for (const f of files) { const r = await fetch(`/api/brand-docs/upload?filename=${encodeURIComponent(f.name)}&brand=${encodeURIComponent(brandIn.value || 'Nikki Beach')}`, { method: 'PUT', body: f }); if (!r.ok) throw new Error(`Upload failed: ${f.name}`); docs = await r.json(); }
@@ -653,7 +653,7 @@ function lightbox(imgs, start, title) {
   document.addEventListener('keydown', key);
   document.body.append(lb);
 }
-// Client documents on every property page (Peter 10/1): view, download, upload more. Uploads respect the edit lock.
+// Client documents on every property page (Peter 10/1): view, download, upload more. 10/27: upload, rename and remove need no Edit lead lock.
 const DOC_KINDS = [['teaser', 'Teaser / IM'], ['nda', 'NDA'], ['loi', 'LOI / term sheet'], ['hma_draft', 'HMA draft'], ['feasibility', 'Feasibility / market study'], ['site_plan', 'Site plan / survey'], ['photos', 'Photos / drone'], ['title', 'Title / tenure'], ['licence', 'Licences'], ['ic_memo', 'IC memo'], ['other', 'Other']];
 function docActions(d) {
   if (!d.url) return [];
@@ -662,7 +662,7 @@ function docActions(d) {
     uploaded ? h('a', { class: 'btn sm', href: `${d.url}?download=1`, download: d.title, onclick: (e) => e.stopPropagation() }, 'Download') : null];
 }
 function uploadDoc(lead, kind, reload) {
-  const file = h('input', { type: 'file', multiple: true, style: { display: 'none' }, onchange: async (e) => {
+  const file = h('input', { type: 'file', multiple: true, 'data-keep': '1', style: { display: 'none' }, onchange: async (e) => {
     const files = [...e.target.files]; if (!files.length) return;
     try {
       for (const f of files) { const r = await fetch(`/api/leads/${lead.id}/documents/upload?filename=${encodeURIComponent(f.name)}&kind=${kind()}`, { method: 'PUT', body: f }); if (!r.ok) throw new Error(`Upload failed: ${f.name}`); }
@@ -671,15 +671,21 @@ function uploadDoc(lead, kind, reload) {
   } });
   return file;
 }
+// 10/27 Peter: rename and remove a document right on the property page, no Edit lead lock needed.
+function docEdits(lead, d, reload) {
+  return [h('button', { class: 'btn sm ghost', 'data-keep': '1', onclick: async (e) => { e.stopPropagation(); const t = prompt('Rename document', d.title); if (!t || t.trim() === d.title) return;
+      try { await api(`/api/leads/${lead.id}/documents/${d.id}`, { method: 'PATCH', body: { title: t.trim() } }); toast('Renamed'); reload(); } catch (err) { toast(err.message, true); } } }, 'Rename'),
+    h('button', { class: 'btn sm ghost danger', 'data-keep': '1', onclick: async (e) => { e.stopPropagation(); if (!confirm(`Remove "${d.title}" from this property?`)) return;
+      try { await api(`/api/leads/${lead.id}/documents/${d.id}`, { method: 'DELETE' }); toast('Removed'); reload(); } catch (err) { toast(err.message, true); } } }, 'Remove')];
+}
 function docsCard(lead, reload) {
   const file = uploadDoc(lead, () => 'other', reload);
   const card = h('div', { class: 'card pad' }, h('div', { class: 'eyebrow', style: { marginBottom: '10px' } }, lead.documents.length ? `Documents · ${lead.documents.length}` : 'Documents'));
   if (lead.documents.length) card.append(...lead.documents.map(d => h('div', { class: 'doc-row' },
     h('div', { class: 'doc-name' }, h('div', { class: 'lead-name', title: d.title }, d.title), h('div', { class: 'small muted' }, `${fmt.title(d.kind)}${d.size ? ` · ${(d.size / 1e6).toFixed(1)} MB` : ''} · ${fmt.date(d.at)}`)),
-    h('div', { class: 'btn-row' }, docActions(d)))));
+    h('div', { class: 'btn-row' }, docActions(d), docEdits(lead, d, reload)))));
   else card.append(h('div', { class: 'small muted' }, 'No documents yet.'));
-  card.append(h('div', { style: { marginTop: '10px' } }, h('button', { class: 'btn sm', onclick: () => file.click() }, 'Upload document'), file,
-    state.editing ? null : h('div', { class: 'small muted', style: { marginTop: '6px' } }, 'Click Edit lead to upload.')));
+  card.append(h('div', { style: { marginTop: '10px' } }, h('button', { class: 'btn sm', 'data-keep': '1', onclick: () => file.click() }, 'Upload documents'), file));
   return card;
 }
 // Small location map on the lead page (Austin 9/30). Pin comes from Peter's Monday Address column.
