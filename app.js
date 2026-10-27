@@ -88,6 +88,7 @@ async function boot() {
 function start() { window.addEventListener('hashchange', render); document.addEventListener('keydown', onKey); render(); }
 async function loadAll() {
   [state.config, state.leads, state.orgs, state.contacts, state.footprint] = await Promise.all([api('/api/config'), api('/api/leads'), api('/api/orgs'), api('/api/contacts'), api('/api/footprint')]);
+  state.destinations = await api('/api/destinations').catch(() => []);   // 10/27 Peter: market profile per pin
 }
 async function refreshLeads() { state.leads = await api('/api/leads'); }
 
@@ -376,9 +377,9 @@ function viewMap(main) {
     const dead = NB_RED.has(l.airtable.status); const approx = l.geo_precision === 'city';
     const col = Object.fromEntries(l.airtable.columns.map(c => [c.title, c.text]));
     L.marker([l.lat, l.lng], { icon: icon(`${dead ? 'nbx' : 'nblive'}${approx ? ' approx' : ''}`), zIndexOffset: dead ? 100 : 400 }).addTo(layers[dead ? 'nb_declined' : 'nb_live'])
-      .bindPopup(`<b>${escapeHtml(l.name)}</b><br><span style="color:${dead ? '#c2401f' : '#2f8596'};font-weight:600">${escapeHtml(l.airtable.status === 'DECLINED' ? 'Declined by Nikki Beach' : nbTitle(l.airtable.status))}</span>${col['Initial contact made'] ? ` · first contact ${escapeHtml(fmt.date(col['Initial contact made']))}` : ''}<br>${escapeHtml([col.City, col.Country].filter(Boolean).join(', '))}${col.Remarks ? `<br><i>${escapeHtml(col.Remarks.slice(0, 160))}</i>` : ''}${approx ? '<br><span class="small muted">Pin is the city, not the exact site</span>' : ''}<br><a href="#/lead/${l.id}">Open lead</a>`);
+      .bindPopup(`<b>${escapeHtml(l.name)}</b><br><span style="color:${dead ? '#c2401f' : '#2f8596'};font-weight:600">${escapeHtml(l.airtable.status === 'DECLINED' ? 'Declined by Nikki Beach' : nbTitle(l.airtable.status))}</span>${col['Initial contact made'] ? ` · first contact ${escapeHtml(fmt.date(col['Initial contact made']))}` : ''}<br>${escapeHtml([col.City, col.Country].filter(Boolean).join(', '))}${col.Remarks ? `<br><i>${escapeHtml(col.Remarks.slice(0, 160))}</i>` : ''}${approx ? '<br><span class="small muted">Pin is the city, not the exact site</span>' : ''}${destPopupHtml(destFor(l))}<br><a href="#/lead/${l.id}">Open lead</a>`);
   }
-  for (const l of state.leads) if (l.lat && l.lng && l.status === 'active' && layers[l.temperature] && !(l.airtable && !l.monday)) L.marker([l.lat, l.lng], { icon: icon(l.temperature), zIndexOffset: 500 }).addTo(layers[l.temperature]).bindPopup(`<b>${escapeHtml(l.name)}</b><br>${escapeHtml(l.address || l.country || '')}<br><a href="#/lead/${l.id}">Open lead →</a>`);
+  for (const l of state.leads) if (l.lat && l.lng && l.status === 'active' && layers[l.temperature] && !(l.airtable && !l.monday)) L.marker([l.lat, l.lng], { icon: icon(l.temperature), zIndexOffset: 500 }).addTo(layers[l.temperature]).bindPopup(`<b>${escapeHtml(l.name)}</b><br>${escapeHtml(l.address || l.country || '')}${destPopupHtml(destFor(l))}<br><a href="#/lead/${l.id}">Open lead →</a>`);
   for (const [k] of items) if (on[k]) layers[k].addTo(map);
   setTimeout(() => map.invalidateSize(), 50);
 
@@ -688,6 +689,48 @@ function docsCard(lead, reload) {
   card.append(h('div', { style: { marginTop: '10px' } }, h('button', { class: 'btn sm', 'data-keep': '1', onclick: () => file.click() }, 'Upload documents'), file));
   return card;
 }
+// ---------- Destination profiles (Peter 10/27): season, visitor volume split from cruise/day traffic, wealth rating, all sourced.
+function destFor(l) {
+  if (!l || !state.destinations) return null;
+  const key = `${l.country || ''}|${l.city || ''}`;
+  return state.destinations.find(d => (d.members || []).includes(key)) || null;
+}
+const fmtCount = (n) => n == null ? null : n >= 1e6 ? `${(n / 1e6).toFixed(n >= 1e7 ? 0 : 1)}M` : n >= 1e3 ? `${Math.round(n / 1e3)}k` : String(n);
+const hnwDots = (r) => r ? '●'.repeat(r) + '○'.repeat(5 - r) : '';
+function destSeason(d) {
+  return [d.peak_months && `Peak ${d.peak_months}`, d.shoulder_months && `shoulder ${d.shoulder_months}`, d.closed_or_dead_months && `quiet ${d.closed_or_dead_months}`].filter(Boolean).join(', ') || (d.year_round ? 'Year-round' : null);
+}
+function destVisitors(d) {
+  const a = fmtCount(d.stayover_visitors_annual), b = fmtCount(d.cruise_or_day_visitors_annual);
+  const parts = [a && `${a} overnight`, b && `${b} cruise/day`].filter(Boolean);
+  return parts.length ? `${parts.join(' · ')}${d.data_year ? ` (${d.data_year})` : ''}` : null;
+}
+function destPopupHtml(d) {
+  if (!d) return '';
+  const rows = [
+    `<b>${escapeHtml(d.destination)}</b>${d.hnw_rating ? ` <span title="High-net-worth rating, 1 to 5" style="color:#2f8596;letter-spacing:1px">${hnwDots(d.hnw_rating)}</span>` : ''}`,
+    destSeason(d) && escapeHtml(destSeason(d)),
+    destVisitors(d) && escapeHtml(destVisitors(d)),
+    d.hnw_reason && `<i>${escapeHtml(d.hnw_reason)}</i>`];
+  return `<div style="margin-top:8px;padding-top:8px;border-top:1px solid #e5e5e5;font-size:12px;line-height:1.45">${rows.filter(Boolean).join('<br>')}</div>`;
+}
+function destCard(lead) {
+  const d = destFor(lead);
+  const card = h('div', { class: 'card pad' }, h('div', { class: 'eyebrow', style: { marginBottom: '10px' } }, 'Destination'));
+  if (!d) { card.append(h('div', { class: 'small muted' }, 'No destination profile for this location yet.')); return card; }
+  const line = (label, val) => val ? h('div', { class: 'group-row', style: { gridTemplateColumns: '110px 1fr' } }, h('span', { class: 'small muted' }, label), h('span', { class: 'small' }, val)) : null;
+  card.append(h('div', { class: 'lead-name', style: { marginBottom: '6px' } }, d.destination, d.hnw_rating ? h('span', { title: 'High-net-worth rating, 1 to 5', style: { marginLeft: '8px', color: '#2f8596', letterSpacing: '1px' } }, hnwDots(d.hnw_rating)) : null),
+    line('Season', destSeason(d)),
+    line('Visitors', destVisitors(d)),
+    line('Figures cover', d.scope),
+    line('Avg stay', d.avg_stay_nights ? `${d.avg_stay_nights} nights` : null),
+    line('Avg spend', d.avg_spend_per_visitor_usd ? `$${Math.round(d.avg_spend_per_visitor_usd).toLocaleString()} per visitor` : null),
+    line('Luxury hotels', d.five_star_or_luxury_hotel_count != null ? String(d.five_star_or_luxury_hotel_count) : null),
+    line('Yachts', d.superyacht_or_marina_note), line('Private jets', d.private_jet_note), line('Second homes', d.uhnw_second_home_note),
+    d.hnw_reason ? h('div', { class: 'small', style: { marginTop: '8px', fontStyle: 'italic' } }, d.hnw_reason) : null,
+    (d.sources || []).length ? h('div', { class: 'small muted', style: { marginTop: '8px' } }, 'Sources: ', ...d.sources.flatMap((x, i) => [i ? ' · ' : '', x.url ? h('a', { href: x.url, target: '_blank', rel: 'noopener' }, `${x.label}${x.year ? ` (${x.year})` : ''}`) : `${x.label}${x.year ? ` (${x.year})` : ''}`])) : null);
+  return card;
+}
 // Small location map on the lead page (Austin 9/30). Pin comes from Peter's Monday Address column.
 function miniMap(lead) {
   const card = h('div', { class: 'card pad' }, h('div', { class: 'eyebrow', style: { marginBottom: '10px' } }, 'Location'));
@@ -756,6 +799,7 @@ async function viewLead(main, id, tab) {
     airtableCard(lead),
     photoCard(lead),
     miniMap(lead),
+    destCard(lead),
     docsCard(lead, reload),
     gateBox,
     h('div', { class: 'card pad' }, h('div', { class: 'eyebrow', style: { marginBottom: '10px' } }, 'Score'),
