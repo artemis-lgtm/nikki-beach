@@ -719,7 +719,7 @@ function destCard(lead) {
   const card = h('div', { class: 'card pad' }, h('div', { class: 'eyebrow', style: { marginBottom: '10px' } }, 'Destination'));
   if (!d) { card.append(h('div', { class: 'small muted' }, 'No destination profile for this location yet.')); return card; }
   const line = (label, val) => val ? h('div', { class: 'group-row', style: { gridTemplateColumns: '110px 1fr' } }, h('span', { class: 'small muted' }, label), h('span', { class: 'small' }, val)) : null;
-  card.append(h('div', { class: 'lead-name', style: { marginBottom: '6px' } }, d.destination, d.hnw_rating ? h('span', { title: 'High-net-worth rating, 1 to 5', style: { marginLeft: '8px', color: '#2f8596', letterSpacing: '1px' } }, hnwDots(d.hnw_rating)) : null),
+  card.append(...[h('div', { class: 'lead-name', style: { marginBottom: '6px' } }, d.destination, d.hnw_rating ? h('span', { title: 'High-net-worth rating, 1 to 5', style: { marginLeft: '8px', color: '#2f8596', letterSpacing: '1px' } }, hnwDots(d.hnw_rating)) : null),
     line('Season', destSeason(d)),
     line('Visitors', destVisitors(d)),
     line('Figures cover', d.scope),
@@ -728,7 +728,7 @@ function destCard(lead) {
     line('Luxury hotels', d.five_star_or_luxury_hotel_count != null ? String(d.five_star_or_luxury_hotel_count) : null),
     line('Yachts', d.superyacht_or_marina_note), line('Private jets', d.private_jet_note), line('Second homes', d.uhnw_second_home_note),
     d.hnw_reason ? h('div', { class: 'small', style: { marginTop: '8px', fontStyle: 'italic' } }, d.hnw_reason) : null,
-    (d.sources || []).length ? h('div', { class: 'small muted', style: { marginTop: '8px' } }, 'Sources: ', ...d.sources.flatMap((x, i) => [i ? ' · ' : '', x.url ? h('a', { href: x.url, target: '_blank', rel: 'noopener' }, `${x.label}${x.year ? ` (${x.year})` : ''}`) : `${x.label}${x.year ? ` (${x.year})` : ''}`])) : null);
+    (d.sources || []).length ? h('div', { class: 'small muted', style: { marginTop: '8px' } }, 'Sources: ', ...d.sources.flatMap((x, i) => [i ? ' · ' : '', x.url ? h('a', { href: x.url, target: '_blank', rel: 'noopener' }, `${x.label}${x.year ? ` (${x.year})` : ''}`) : `${x.label}${x.year ? ` (${x.year})` : ''}`])) : null].filter(Boolean));
   return card;
 }
 // Small location map on the lead page (Austin 9/30). Pin comes from Peter's Monday Address column.
