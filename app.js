@@ -89,6 +89,7 @@ function start() { window.addEventListener('hashchange', render); document.addEv
 async function loadAll() {
   [state.config, state.leads, state.orgs, state.contacts, state.footprint] = await Promise.all([api('/api/config'), api('/api/leads'), api('/api/orgs'), api('/api/contacts'), api('/api/footprint')]);
   state.destinations = await api('/api/destinations').catch(() => []);   // 10/27 Peter: market profile per pin
+  state.views = await api('/api/views').catch(() => []);                  // 10/28 Peter: saved views down the left of the Overview
 }
 async function refreshLeads() { state.leads = await api('/api/leads'); }
 
@@ -273,16 +274,133 @@ function airtableCard(lead) {
     notes ? h('details', { style: { marginTop: '8px' } }, h('summary', { class: 'small' }, 'Internal notes'), h('div', { class: 'small', style: { whiteSpace: 'pre-wrap', maxHeight: '320px', overflow: 'auto' } }, notes)) : null,
     a.attachments ? h('div', { class: 'small muted', style: { marginTop: '8px' } }, `${a.attachments} attachment${a.attachments > 1 ? 's' : ''} in Airtable`) : null);
 }
+// ---------- Overview views (Peter 10/28: "emulate Airtable a little more")
+// A list of views on the left, like Airtable's: built-in Airtable Leads (everything in Nikki Beach's Airtable) and
+// Continuity Leads (everything we added ourselves: the Monday board plus leads made here), plus any view saved by name.
+// Each view shows as a Grid (the grouped table) or a Gallery (cards with a header image). A click opens a pop-up.
+const BUILTIN_VIEWS = [
+  { id: 'all', name: 'All leads', source: 'all', builtin: true },
+  { id: 'airtable', name: 'Airtable Leads', source: 'airtable', builtin: true },
+  { id: 'continuity', name: 'Continuity Leads', source: 'continuity', builtin: true },
+];
+const allViews = () => [...BUILTIN_VIEWS, ...(state.views || [])];
+const lsGet = (k, d) => { try { return localStorage.getItem(k) ?? d; } catch { return d; } };
+const lsSet = (k, v) => { try { localStorage.setItem(k, v); } catch {} };
+const isAirtableLead = (l) => !!l.airtable;
+const isContinuityLead = (l) => !l.airtable || !!l.monday;
+// "Bahia Cabana OR Selene" matches either phrase
+const matchesQ = (l, q) => { if (!q) return true; const hay = [l.name, l.ref, l.address, l.city, l.country, ...(l.monday?.columns || []).map(c => c.text), ...(l.airtable?.columns || []).map(c => c.text)].join(' ').toLowerCase(); return q.split(/\s+OR\s+/i).map(x => x.trim().toLowerCase()).filter(Boolean).some(x => hay.includes(x)); };
+const viewLeads = (v, extraQ) => state.leads.filter(l => (v.source === 'airtable' ? isAirtableLead(l) : v.source === 'continuity' ? isContinuityLead(l) : true)
+  && (!v.nb_status || l.airtable?.status === v.nb_status) && matchesQ(l, v.q) && matchesQ(l, extraQ));
+async function saveViews(list) { state.views = await api('/api/views', { method: 'PUT', body: list }); }
+function viewModal(v = null) {
+  const name = h('input', { class: 'input', value: v?.name || '', placeholder: 'e.g. Peter’s Leads' });
+  const source = h('select', { class: 'input' }, [['all', 'All leads'], ['airtable', 'Airtable Leads'], ['continuity', 'Continuity Leads']].map(([k, t]) => h('option', { value: k, selected: (v?.source || 'all') === k }, t)));
+  const q = h('input', { class: 'input', value: v?.q || '', placeholder: 'Words to match, e.g. Bahia Cabana OR Selene' });
+  const st = h('select', { class: 'input' }, h('option', { value: '' }, 'Any'), NB_STATUS_ORDER.map(k => h('option', { value: k, selected: v?.nb_status === k }, nbTitle(k))));
+  const layout = h('select', { class: 'input' }, [['grid', 'Grid'], ['gallery', 'Gallery']].map(([k, t]) => h('option', { value: k, selected: (v?.layout || 'grid') === k }, t)));
+  const row = (label, el, hint) => h('label', { class: 'field', style: { display: 'block', marginBottom: '12px' } }, h('div', { class: 'small muted', style: { marginBottom: '4px' } }, label), el, hint ? h('div', { class: 'small muted', style: { marginTop: '4px' } }, hint) : null);
+  const body = h('div', {}, row('Name', name), row('Show', source), row('Matching', q, 'Leave blank for everything. Put OR between names to match any of them.'), row('Nikki Beach status', st), row('Layout', layout));
+  const ov = modal(v ? 'Edit view' : 'New view', 'Views are shared with everyone signed in.', body, (close) => [
+    v ? h('button', { class: 'btn ghost danger', 'data-keep': '1', onclick: async () => { if (!confirm(`Delete the view "${v.name}"? The leads in it are not touched.`)) return; try { await saveViews(state.views.filter(x => x.id !== v.id)); state.viewId = 'all'; lsSet('nb_view', 'all'); close(); render(); toast('View deleted'); } catch (err) { toast(err.message, true); } } }, 'Delete view') : null,
+    h('button', { class: 'btn primary', 'data-keep': '1', onclick: async () => {
+      if (!name.value.trim()) { toast('Give the view a name', true); return; }
+      const nv = { id: v?.id || `v${Date.now()}`, name: name.value.trim(), source: source.value, q: q.value.trim(), nb_status: st.value, layout: layout.value };
+      try { await saveViews(v ? state.views.map(x => x.id === v.id ? nv : x) : [...(state.views || []), nv]); state.viewId = nv.id; lsSet('nb_view', nv.id); lsSet(`nb_layout_${nv.id}`, nv.layout); close(); render(); toast(v ? 'View saved' : 'View created'); } catch (err) { toast(err.message, true); }
+    } }, v ? 'Save' : 'Create view')]);
+  ov.dataset.unlocked = '1'; ov.querySelector('.modal-foot .btn:not(.ghost):not(.primary)')?.remove();   // a view form is never read-only
+  return ov;
+}
+// The header image Airtable puts on each gallery card: the property's first photo, else its first Airtable attachment,
+// else a map tile of where it is (so every card gets one automatically), else a plain colour block with its initials.
+function tileFor(lat, lng, z = 15) {
+  const n = 2 ** z, x = (lng + 180) / 360 * n, r = lat * Math.PI / 180, y = (1 - Math.log(Math.tan(r) + 1 / Math.cos(r)) / Math.PI) / 2 * n;
+  return { url: `https://tile.openstreetmap.org/${z}/${Math.floor(x)}/${Math.floor(y)}.png`, fx: x % 1, fy: y % 1 };
+}
+function headerImage(l, cls = 'g-head') {
+  const photo = l.monday?.images?.[0] || l.airtable?.thumb;
+  if (photo) return h('div', { class: cls }, h('img', { src: photo, alt: '', loading: 'lazy', decoding: 'async' }));
+  if (l.lat && l.lng) { const t = tileFor(l.lat, l.lng);
+    return h('div', { class: `${cls} g-map` }, h('img', { src: t.url, alt: '', loading: 'lazy', style: { objectPosition: `${Math.round(t.fx * 100)}% ${Math.round(t.fy * 100)}%` } }), h('span', { class: 'g-pin', html: '<svg viewBox="0 0 24 24" width="26" height="26"><path d="M12 2a7 7 0 0 0-7 7c0 5.2 7 13 7 13s7-7.8 7-13a7 7 0 0 0-7-7zm0 9.5A2.5 2.5 0 1 1 12 6.5a2.5 2.5 0 0 1 0 5z" fill="#e5532e" stroke="#fff" stroke-width="1.2"/></svg>' })); }
+  const initials = (l.name || '?').replace(/^[^,–-]*[,–-]\s*/, '').split(/\s+/).filter(w => /^[A-Za-z]/.test(w)).slice(0, 2).map(w => w[0]).join('').toUpperCase();
+  return h('div', { class: `${cls} g-blank` }, h('span', {}, initials || '·'));
+}
+const atText = (l, t) => ((l.airtable?.columns || []).find(c => c.title === t)?.text || '').trim();
+const mdText = (l, t) => ((l.monday?.columns || []).find(c => c.title === t)?.text || '').trim();
+const leadType = (l) => atText(l, 'Type') || mdText(l, 'Type') || mdText(l, 'Property Type') || formatLabel(l.format);
+const leadIntro = (l) => atText(l, 'Short Intro') || l.summary || mdText(l, 'Notes');
+const leadPlace = (l) => [l.city || atText(l, 'City'), l.country || atText(l, 'Country')].filter(Boolean).filter((x, i, a) => a.indexOf(x) === i).join(', ');
+const statusPill = (l) => l.airtable ? nbPill(l.airtable.status) : h('span', { class: 'pill', style: { whiteSpace: 'nowrap' } }, l.declined_at ? 'Declined' : l.handed_off_at ? 'Handed off' : stageLabel(l.stage));
+function galleryCard(l) {
+  const next = atText(l, 'Next Steps');
+  return h('div', { class: 'g-card', tabindex: '0', onclick: () => leadPopup(l), onkeydown: (e) => { if (e.key === 'Enter') leadPopup(l); } },
+    headerImage(l),
+    h('div', { class: 'g-body' },
+      h('div', { class: 'g-title', title: l.name }, l.name, isNewListing(l) ? h('span', { class: 'new-listing' }, 'New listing') : null),
+      h('div', { class: 'g-place' }, [leadPlace(l), fmt.date(dateAdded(l))].filter(Boolean).join(' · ')),
+      h('div', { class: 'g-pills' }, h('span', { class: 'pill' }, leadType(l)), statusPill(l), h('span', { class: `temp ${l.temperature}`, style: { fontSize: '12px' } }, fmt.title(l.temperature))),
+      leadIntro(l) ? h('div', { class: 'g-intro' }, leadIntro(l)) : null,
+      next ? h('div', { class: 'g-next' }, h('b', {}, 'Next: '), next) : null));
+}
+// Peter 10/28: a click opens the property as a pop-up over the list, like Airtable's record view. Open full page for everything else.
+function leadPopup(l) {
+  $('.overlay')?.remove();
+  const kv = (t, v) => v ? [h('dt', {}, t), h('dd', { class: 'small', style: { whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', minWidth: 0 } }, v)] : [];
+  const at = (l.airtable?.columns || []).filter(c => c.text && !['Status', 'Internal notes'].includes(c.title));
+  const md = (l.monday?.columns || []).filter(c => c.text && c.title !== 'Images');
+  const imgs = [...(l.monday?.images || []), ...(l.airtable?.thumb ? [l.airtable.thumb] : [])];
+  const close = () => ov.remove();
+  const ov = h('div', { class: 'overlay', onclick: (e) => { if (e.target === ov) close(); } }, h('div', { class: 'modal rec-pop' },
+    h('button', { class: 'rec-x', 'aria-label': 'Close', 'data-keep': '1', onclick: close }, '×'),
+    h('div', { onclick: () => imgs.length && lightbox(imgs.map(apiUrl), 0, l.name), style: { cursor: imgs.length ? 'zoom-in' : '' } }, headerImage(l, 'rec-head')),
+    h('h2', { style: { marginTop: '16px' } }, l.name),
+    h('div', { class: 'sub' }, [l.ref, leadPlace(l), l.address].filter(Boolean).join(' · ')),
+    h('div', { class: 'g-pills', style: { marginBottom: '14px' } }, h('span', { class: 'pill' }, leadType(l)), statusPill(l), tempPicker(l)),
+    h('dl', { class: 'kv' }, kv('Date added', fmt.date(dateAdded(l))), kv('Summary', l.airtable ? '' : (l.summary || '')),
+      ...at.map(c => kv(c.title, c.title === 'Initial contact made' || c.title === 'Deadline' ? fmt.date(c.text) : c.text)),
+      ...md.map(c => kv(c.title, c.text))),
+    h('div', { class: 'modal-foot' },
+      l.airtable?.url ? h('a', { class: 'btn', href: l.airtable.url, target: '_blank', rel: 'noopener', style: { marginRight: 'auto' } }, 'Open in Airtable') : null,
+      l.monday?.url ? h('a', { class: 'btn', href: l.monday.url, target: '_blank', rel: 'noopener', style: l.airtable?.url ? {} : { marginRight: 'auto' } }, 'Open in Monday') : null,
+      h('button', { class: 'btn ghost', 'data-keep': '1', onclick: close }, 'Close'),
+      h('button', { class: 'btn primary', 'data-keep': '1', onclick: () => { close(); navigate(`/lead/${l.id}`); } }, 'Open full page'))));
+  ov.dataset.unlocked = '1';
+  document.body.append(ov);
+}
 function viewPipeline(main) {
   const f = state.filters;
+  if (!state.viewId) state.viewId = lsGet('nb_view', 'all');
+  let v = allViews().find(x => x.id === state.viewId) || BUILTIN_VIEWS[0];
+  let layout = lsGet(`nb_layout_${v.id}`, v.layout || 'grid');
   const search = h('input', { 'data-keep': '1', class: 'input', style: { maxWidth: '420px' }, placeholder: 'Search properties, addresses, brokers, notes…', value: f.q, oninput: (e) => { f.q = e.target.value; clearTimeout(searchT); searchT = setTimeout(draw, 160); } });   // 10/14 Austin (lag): redraw once typing pauses, not per keystroke
   let searchT;
   const wrap = h('div', {});
-  main.append(topbar('Overview', 'Same groups and columns as the Monday Properties board, plus how hot or cold each lead is.', h('a', { class: 'btn', href: '/api/export/pipeline.csv' }, 'Export CSV'), h('button', { class: 'btn primary', 'data-keep': '1', onclick: () => newLeadModal() }, '+ New lead')), h('div', { class: 'filters' }, search), wrap);
+  const viewList = h('div', { class: 'views-list' });
+  const panel = h('aside', { class: 'views-panel' }, h('div', { class: 'eyebrow', style: { margin: '2px 8px 8px' } }, 'Views'), viewList,
+    h('button', { class: 'btn sm ghost', 'data-keep': '1', style: { marginTop: '8px', width: '100%', justifyContent: 'flex-start' }, onclick: () => viewModal() }, '+ New view'));
+  const layoutBtns = h('div', { class: 'layout-seg' });
+  const drawPanel = () => {
+    viewList.replaceChildren(...allViews().map(x => h('div', { class: `view-item${x.id === v.id ? ' active' : ''}`, onclick: () => { state.viewId = x.id; lsSet('nb_view', x.id); v = x; layout = lsGet(`nb_layout_${v.id}`, v.layout || 'grid'); drawPanel(); draw(); } },
+      h('span', { class: 'view-ico', html: lsGet(`nb_layout_${x.id}`, x.layout || 'grid') === 'gallery' ? '<svg viewBox="0 0 16 16" width="14" height="14"><path d="M2 2h5v5H2zM9 2h5v5H9zM2 9h5v5H2zM9 9h5v5H9z" fill="none" stroke="currentColor" stroke-width="1.4"/></svg>' : '<svg viewBox="0 0 16 16" width="14" height="14"><path d="M2 3h12v10H2zM2 6.5h12M2 10h12M6 3v10" fill="none" stroke="currentColor" stroke-width="1.4"/></svg>' }),
+      h('span', { class: 'view-name' }, x.name), h('span', { class: 'n' }, viewLeads(x).length),
+      x.builtin ? null : h('button', { class: 'view-edit', title: 'Edit view', 'data-keep': '1', onclick: (e) => { e.stopPropagation(); viewModal(x); } }, '⋯'))));
+    layoutBtns.replaceChildren(...[['grid', 'Grid'], ['gallery', 'Gallery']].map(([k, t]) => h('button', { class: `btn sm${layout === k ? ' on' : ''}`, 'data-keep': '1', onclick: () => { layout = k; lsSet(`nb_layout_${v.id}`, k); drawPanel(); draw(); } }, t)));
+  };
+  const title = h('h1', {});
+  main.append(h('div', { class: 'ov-layout' }, panel, h('div', { class: 'ov-main' },
+    h('div', { class: 'topbar' }, h('div', {}, title, h('div', { class: 'sub' }, 'Pick a view on the left. Click any property to open it.')), h('div', { class: 'btn-row' }, h('a', { class: 'btn', href: '/api/export/pipeline.csv' }, 'Export CSV'), h('button', { class: 'btn primary', 'data-keep': '1', onclick: () => newLeadModal() }, '+ New lead'))),
+    h('div', { class: 'filters', style: { display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' } }, search, layoutBtns), wrap)));
+  drawPanel();
   function draw() {
     dropMaps();
-    let ls = state.leads;
-    if (f.q) { const s = f.q.toLowerCase(); ls = ls.filter(l => [l.name, l.ref, l.address, ...(l.monday?.columns || []).map(c => c.text), ...(l.airtable?.columns || []).map(c => c.text)].join(' ').toLowerCase().includes(s)); }
+    title.textContent = v.name;
+    const ls = viewLeads(v, f.q);
+    if (layout === 'gallery') {
+      const sorted = [...ls].sort((a, b) => Date.parse(dateAdded(b) || 0) - Date.parse(dateAdded(a) || 0));
+      wrap.replaceChildren(sorted.length ? h('div', { class: 'gallery' }, sorted.slice(0, state.galleryMax || 120).map(galleryCard)) : h('div', { class: 'empty' }, h('h3', {}, 'No matches'), 'Clear the search or pick another view.'),
+        sorted.length > (state.galleryMax || 120) ? h('div', { style: { textAlign: 'center', margin: '18px 0' } }, h('button', { class: 'btn', 'data-keep': '1', onclick: () => { state.galleryMax = (state.galleryMax || 120) + 120; draw(); } }, `Show more (${sorted.length - (state.galleryMax || 120)} left)`)) : null);
+      return;
+    }
     const groups = new Map();
     // 9/30 Austin: handed-off and declined properties drop out of their area group into two groups at the bottom
     // 10/14 Austin: Nikki Beach's own Airtable projects get groups by THEIR status, so what Nikki Beach declined is obvious
@@ -294,9 +412,9 @@ function viewPipeline(main) {
       if (!groups.has(g)) groups.set(g, { color: gc, leads: [] });
       groups.get(g).leads.push(l);
     }
-    wrap.replaceChildren(...(groups.size ? [...groups].map(([g, { color, leads }]) => { const box = h('div', { class: 'card wide-scroll', style: { borderLeft: `4px solid ${color}` } }); const slide = (d) => box.scrollBy({ left: d * box.clientWidth * 0.7, behavior: 'smooth' });
+    wrap.replaceChildren(...(groups.size ? [...groups].map(([g, { color, leads }]) => { const box = h('div', { class: 'card wide-scroll', style: { borderLeft: `4px solid ${color}` } });
       const nb = leads.every(l => l.airtable && !l.monday);                 // a Nikki Beach Airtable group: their columns, not Monday's
-      const collapsible = nb && NB_COLLAPSED.has(g); const open = !collapsible || state.nbOpen?.[g] || f.q;
+      const collapsible = nb && NB_COLLAPSED.has(g); const open = !collapsible || state.nbOpen?.[g] || f.q || v.q;
       const cols = nb ? AIRTABLE_COLS : MONDAY_COLS; const cell = nb ? airtableCell : mondayCell;
       if (!open) box.style.display = 'none';
       return h('div', { style: { marginBottom: '28px' } },
@@ -305,20 +423,17 @@ function viewPipeline(main) {
         h('span', { style: { marginLeft: 'auto' } }, groupMap(leads, color))),   // area map on the right; More columns buttons removed 9/30 (the scrollbar stays)
       (open && box.append(h('table', { class: 'table' },
         h('thead', {}, h('tr', {}, h('th', {}, 'Property'), h('th', { style: { whiteSpace: 'nowrap' } }, 'Date added'), h('th', {}, 'Hot / cold'), nb ? null : h('th', { style: { whiteSpace: 'nowrap' } }, 'Nikki Beach status'), cols.map(c => h('th', { style: { whiteSpace: 'nowrap' } }, c)))),
-        h('tbody', {}, leads.map(l => h('tr', { class: l.declined_at ? 'handed-off-row declined-row' : l.handed_off_at ? 'handed-off-row' : '', onclick: () => navigate(`/lead/${l.id}`) },
+        h('tbody', {}, leads.map(l => h('tr', { class: l.declined_at ? 'handed-off-row declined-row' : l.handed_off_at ? 'handed-off-row' : '', onclick: (e) => { if (e.target.closest('select,a,button')) return; leadPopup(l); } },
           h('td', { style: { minWidth: '200px' } }, h('div', { class: 'lead-name' }, l.name, isNewListing(l) ? h('span', { class: 'new-listing' }, 'New listing') : null), h('div', { class: 'lead-loc' }, l.ref)),
           h('td', { class: 'small', style: { whiteSpace: 'nowrap' } }, fmt.date(dateAdded(l))),
           h('td', { style: { minWidth: '110px' } }, tempPicker(l), h('div', { style: { marginTop: '6px' } }, heatBar(l))),
           nb ? null : h('td', {}, l.airtable ? nbPill(l.airtable.status) : ''),
           cols.map(c => cell(l, c)),
         ))))), box)); })
-      : [h('div', { class: 'empty' }, h('h3', {}, 'No matches'), 'Clear the search or add a lead.')]));
+      : [h('div', { class: 'empty' }, h('h3', {}, 'No matches'), 'Clear the search or pick another view.')]));
   }
   draw();
 }
-
-
-// ---------- Stage moves (used by the lead page; the Board page that also used them was removed 9/30)
 async function moveStage(lead, stageKey, extra = {}) {
   try { await api(`/api/leads/${lead.id}`, { method: 'PATCH', body: { stage: stageKey, ...extra } }); await refreshLeads(); toast(`${lead.name} → ${stageLabel(stageKey)}`); render(); }
   catch (err) {
