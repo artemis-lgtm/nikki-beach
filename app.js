@@ -488,7 +488,14 @@ function viewMap(main) {
   if (typeof L === 'undefined') { el.append(h('div', { class: 'empty' }, 'Map library did not load.')); return; }
   const map = L.map(el, { worldCopyJump: true }).setView([25, 5], 2); liveMaps.add(map);
   if (state.mapFocus) { const f = state.mapFocus; state.mapFocus = null; setTimeout(() => { map.invalidateSize(); f.length > 1 ? map.fitBounds(f, { padding: [60, 60], maxZoom: 15 }) : map.setView(f[0], 14); }, 80); }
-  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors', maxZoom: 18 }).addTo(map);
+  // 11/1 Peter: a satellite option. Esri World Imagery (free, no key) with place names on top; the choice is remembered.
+  const streetBase = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors', maxZoom: 19 });
+  const satBase = L.layerGroup([
+    L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', { attribution: 'Imagery &copy; Esri, Maxar, Earthstar Geographics', maxZoom: 19 }),
+    L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}', { maxZoom: 19 })]);
+  (lsGet('nb_map_base', 'map') === 'satellite' ? satBase : streetBase).addTo(map);
+  L.control.layers({ Map: streetBase, Satellite: satBase }, null, { position: 'topright', collapsed: false }).addTo(map);
+  map.on('baselayerchange', (e) => lsSet('nb_map_base', e.name === 'Satellite' ? 'satellite' : 'map'));
   for (const [k] of items) layers[k] = L.layerGroup();
   const icon = (cls) => L.divIcon({ className: '', html: `<div class="marker ${cls}"></div>`, iconSize: [18, 18], iconAnchor: [9, 9] });
   for (const f of state.footprint) if (f.lat && f.lng) { const k = /^Lucia\b/.test(f.name) ? 'lucia' : /Cocktail Club|Maison Mer/.test(f.name) ? 'concepts' : f.status === 'closed' ? 'closed' : 'open'; L.marker([f.lat, f.lng], { icon: icon(`fp ${k === 'open' ? '' : k}`), zIndexOffset: k === 'lucia' || k === 'concepts' ? 300 : 0 }).addTo(layers[k]).bindPopup(`<b>${escapeHtml(f.name)}</b><br>${escapeHtml(f.country || '')} · ${escapeHtml(fmt.title(f.format))} · ${escapeHtml(f.status)}${f.opened ? ` · ${f.opened}${f.closed ? `–${f.closed}` : ''}` : ''}${f.outcome ? `<br><span style="color:#6a6a6a">${escapeHtml(f.outcome)}</span>` : ''}`) }
@@ -520,6 +527,10 @@ function viewMap(main) {
   // 11/1 Peter: an area stays editable only while you're shaping it. Saved areas are solid: no corner handles, no dragging.
   const solidStyle = { color: '#e94d8c', weight: 2.5, dashArray: null, fillColor: '#e94d8c', fillOpacity: 0.22 };
   const editingAreas = new Set();
+  // 11/1 Peter: pick a colour per area, e.g. grey for "already looked, dead".
+  const AREA_COLORS = [['#e94d8c', 'Searching'], ['#2e9e5b', 'Promising'], ['#e8a33d', 'In progress'], ['#3b82c4', 'Other'], ['#7d7a8c', 'Dead, already looked']];
+  const areaColor = (a) => a.color || AREA_COLORS[0][0];
+  const styleFor = (a) => ({ ...(editingAreas.has(a.id) ? sketchStyle : solidStyle), color: areaColor(a), fillColor: areaColor(a), fillOpacity: a.color === '#7d7a8c' ? 0.32 : (editingAreas.has(a.id) ? 0.12 : 0.22) });
   async function createShape(type, pts) {
     const c = centroid(pts);
     try { const a = await api('/api/areas', { method: 'POST', body: { lat: c.lat, lng: c.lng, radius_m: Math.round(shapeRadius(pts, c)), shape: { type, points: pts.map(q => [q.lat, q.lng]) } } }); state.areas.push(a); editingAreas.add(a.id); const d = drawArea(a); d.pin.openPopup(); renderAreaList(); }
@@ -567,7 +578,7 @@ function viewMap(main) {
   function drawShape(a, sh) {
     let pts = sh.points.map(q => L.latLng(q[0], q[1]));
     const ed = editingAreas.has(a.id);
-    const poly = L.polygon(pts, { ...(ed ? sketchStyle : solidStyle), interactive: false }).addTo(layers.areas);
+    const poly = L.polygon(pts, { ...styleFor(a), interactive: false }).addTo(layers.areas);
     const pin = L.marker(centroid(pts), { icon: pinIcon, draggable: ed, zIndexOffset: 800, autoPan: true }).addTo(layers.areas);
     const handles = ed ? pts.map((q, i) => L.marker(q, { icon: handleIcon, draggable: true, zIndexOffset: 900 }).addTo(layers.areas)) : [];
     const persist = () => { const c = centroid(pts); a.lat = c.lat; a.lng = c.lng; save(a, { lat: c.lat, lng: c.lng, radius_m: Math.round(shapeRadius(pts, c)), shape: { type: sh.type, points: pts.map(q => [q.lat, q.lng]) } }); };
@@ -594,7 +605,7 @@ function viewMap(main) {
     const sh = shapeOf(a); if (sh) return drawShape(a, sh);
     const center = L.latLng(a.lat, a.lng);
     const ed = editingAreas.has(a.id);
-    const circle = L.circle(center, { radius: a.radius_m, ...(ed ? sketchStyle : solidStyle), interactive: false }).addTo(layers.areas);
+    const circle = L.circle(center, { radius: a.radius_m, ...styleFor(a), interactive: false }).addTo(layers.areas);
     const pin = L.marker(center, { icon: pinIcon, draggable: ed, zIndexOffset: 800, autoPan: true }).addTo(layers.areas);
     pin.bindPopup(() => areaPopup(a), { minWidth: 260 });
     if (!ed) { const d = { circle, pin, handle: null }; drawn.set(a.id, d); return d; }
@@ -616,6 +627,7 @@ function viewMap(main) {
       h('div', { class: 'field' }, h('label', {}, 'Name'), h('input', { value: f.name, oninput: (e) => f.name = e.target.value, placeholder: 'e.g. Sunny Isles beachfront' })),
       h('div', { class: 'field' }, h('label', {}, 'Who should look'), h('input', { value: f.assigned_to, list: 'area-users', oninput: (e) => f.assigned_to = e.target.value, placeholder: 'employee or broker' }), h('datalist', { id: 'area-users' }, users.map(u => h('option', { value: u })))),
       h('div', { class: 'field' }, h('label', {}, 'What to look for'), h('textarea', { rows: 3, oninput: (e) => f.notes = e.target.value }, f.notes)),
+      h('div', { class: 'field' }, h('label', {}, 'Colour'), h('div', { class: 'swatches' }, AREA_COLORS.map(([c, label]) => h('button', { class: `swatch${areaColor(a) === c ? ' on' : ''}`, title: label, style: { background: c }, onclick: async (e) => { e.preventDefault(); await save(a, { color: c }); const d = drawn.get(a.id); if (d) d.circle.setStyle(styleFor(a)); e.target.parentNode.querySelectorAll('.swatch').forEach(x => x.classList.remove('on')); e.target.classList.add('on'); e.target.parentNode.nextSibling.textContent = label; } }))), h('div', { class: 'small muted' }, (AREA_COLORS.find(x => x[0] === areaColor(a)) || AREA_COLORS[0])[1])),
       h('div', { class: 'small muted', style: { margin: '2px 0 10px' } }, editingAreas.has(a.id) ? (shapeOf(a) ? `${shapeOf(a).type === 'box' ? 'Box' : 'Shape'} about ${sizeLabel(a)} · drag the white corners to reshape, the pin to move it` : `Radius ${kmLabel(a.radius_m)} · drag the white dot to change it`) : `${shapeOf(a) ? (shapeOf(a).type === 'box' ? 'Box' : 'Shape') + ' about ' + sizeLabel(a) : 'Radius ' + kmLabel(a.radius_m)} · locked. Press Edit shape to move or reshape it.`),
       h('div', { class: 'row', style: { gap: '6px', flexWrap: 'wrap' } },
         h('button', { class: 'btn sm primary', onclick: async () => { await save(a, f); drawn.get(a.id)?.pin.closePopup(); if (editingAreas.has(a.id)) setEditing(a, false); toast('Saved'); } }, 'Save'),

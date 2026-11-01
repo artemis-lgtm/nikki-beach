@@ -467,3 +467,7 @@ select.temp-pick option { color: #111; background: #fff; text-transform: upperca
 }
 .layout-seg .btn { padding: 5px 14px; white-space: nowrap; flex: 0 0 auto; min-width: 0; height: auto; }
 .ov-layout > * { min-width: 0; }
+/* 11/1 Peter: search-area colour swatches */
+.swatches { display: flex; gap: 6px; margin-bottom: 4px; }
+.swatch { width: 22px; height: 22px; border-radius: 50%; border: 2px solid #fff; box-shadow: 0 0 0 1px var(--border-strong); cursor: pointer; padding: 0; }
+.swatch.on { box-shadow: 0 0 0 2px var(--ink); }
