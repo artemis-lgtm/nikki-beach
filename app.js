@@ -89,7 +89,8 @@ function start() { window.addEventListener('hashchange', render); document.addEv
 async function loadAll() {
   [state.config, state.leads, state.orgs, state.contacts, state.footprint] = await Promise.all([api('/api/config'), api('/api/leads'), api('/api/orgs'), api('/api/contacts'), api('/api/footprint')]);
   state.destinations = await api('/api/destinations').catch(() => []);   // 10/27 Peter: market profile per pin
-  state.views = await api('/api/views').catch(() => []);                  // 10/28 Peter: saved views down the left of the Overview
+  state.views = await api('/api/views').catch(() => []);
+  state.areas = await api('/api/areas').catch(() => []);   // 11/1 Peter: Discovery Areas list on the Overview                  // 10/28 Peter: saved views down the left of the Overview
 }
 async function refreshLeads() { state.leads = await api('/api/leads'); }
 
@@ -284,6 +285,7 @@ const BUILTIN_VIEWS = [
   { id: 'airtable', name: 'Airtable Leads', source: 'airtable', builtin: true },
   { id: 'continuity', name: 'Continuity Leads', source: 'continuity', builtin: true },
   { id: 'declined', name: 'Declined by us', source: 'declined', builtin: true },   // 11/1 Peter: our own declines get their own list
+  { id: 'areas', name: 'Discovery Areas', source: 'areas', builtin: true },   // 11/1 Peter: the map's areas as a list (renamed from search areas)
 ];
 const allViews = () => [...BUILTIN_VIEWS, ...(state.views || [])];
 const lsGet = (k, d) => { try { return localStorage.getItem(k) ?? d; } catch { return d; } };
@@ -292,7 +294,7 @@ const isAirtableLead = (l) => !!l.airtable;
 const isContinuityLead = (l) => !l.airtable || !!l.monday;
 // "Bahia Cabana OR Selene" matches either phrase
 const matchesQ = (l, q) => { if (!q) return true; const hay = [l.name, l.ref, l.address, l.city, l.country, ...(l.monday?.columns || []).map(c => c.text), ...(l.airtable?.columns || []).map(c => c.text)].join(' ').toLowerCase(); return q.split(/\s+OR\s+/i).map(x => x.trim().toLowerCase()).filter(Boolean).some(x => hay.includes(x)); };
-const viewLeads = (v, extraQ) => state.leads.filter(l => (v.source === 'airtable' ? isAirtableLead(l) && !l.declined_at : v.source === 'continuity' ? isContinuityLead(l) && !l.declined_at : v.source === 'declined' ? !!l.declined_at : true)
+const viewLeads = (v, extraQ) => v.source === 'areas' ? (state.areas || []) : state.leads.filter(l => (v.source === 'airtable' ? isAirtableLead(l) && !l.declined_at : v.source === 'continuity' ? isContinuityLead(l) && !l.declined_at : v.source === 'declined' ? !!l.declined_at : true)
   && (!v.nb_status || l.airtable?.status === v.nb_status) && matchesQ(l, v.q) && matchesQ(l, extraQ));
 async function saveViews(list) { state.views = await api('/api/views', { method: 'PUT', body: list }); }
 function viewModal(v = null) {
@@ -478,6 +480,16 @@ function viewPipeline(main) {
   function draw() {
     dropMaps();
     title.textContent = v.name;
+    if (v.source === 'areas') {   // 11/1 Peter: Discovery Areas list; a click opens the map on that area
+      const q = (f.q || '').toLowerCase();
+      const areas = (state.areas || []).filter(a => !q || [a.name, a.assigned_to, a.notes].join(' ').toLowerCase().includes(q));
+      wrap.replaceChildren(areas.length ? h('div', { class: 'card wide-scroll' }, h('table', { class: 'table' },
+        h('thead', {}, h('tr', {}, ['Discovery Area', 'Who is looking', 'What to look for', 'Added'].map(t => h('th', {}, t)))),
+        h('tbody', {}, areas.map(a => h('tr', { onclick: () => { state.mapFocus = [[a.lat, a.lng]]; navigate('/map'); } },
+          h('td', {}, h('div', { class: 'lead-name' }, h('span', { style: { display: 'inline-block', width: '10px', height: '10px', borderRadius: '50%', background: a.color || '#e94d8c', marginRight: '8px' } }), a.name || 'New Discovery Area')),
+          h('td', { class: 'small' }, a.assigned_to || ''), h('td', { class: 'small', style: { maxWidth: '420px' } }, a.notes || ''), h('td', { class: 'small', style: { whiteSpace: 'nowrap' } }, fmt.date(a.created_at))))))) : h('div', { class: 'empty' }, h('h3', {}, 'No Discovery Areas yet'), 'Draw one on the Map page with + Circle, + Box or + Draw shape.'));
+      return;
+    }
     const ls = viewLeads(v, f.q);
     if (layout === 'gallery') {
       const sorted = [...ls].sort((a, b) => Date.parse(dateAdded(b) || 0) - Date.parse(dateAdded(a) || 0));
@@ -550,7 +562,7 @@ function viewMap(main) {
   if (on.areas === undefined) on.areas = true;
   if (on.nb_live === undefined) { on.nb_live = true; on.nb_declined = true; }
   if (on.our_declined === undefined) on.our_declined = true;
-  const items = [['areas', 'Search areas', { background: 'rgba(233,77,140,.25)', border: '2px dashed #e94d8c' }], ['hot', 'hot', { background: tempColor.hot }], ['warm', 'warm', { background: tempColor.warm }], ['cold', 'cold', { background: tempColor.cold }],
+  const items = [['areas', 'Discovery Areas', { background: 'rgba(233,77,140,.25)', border: '2px dashed #e94d8c' }], ['hot', 'hot', { background: tempColor.hot }], ['warm', 'warm', { background: tempColor.warm }], ['cold', 'cold', { background: tempColor.cold }],
     ['open', 'Nikki Beach open / announced', { background: '#16151f', borderRadius: '2px' }], ['closed', 'Nikki Beach closed', { background: '#fff', border: '2px solid #16151f', borderRadius: '2px' }], ['lucia', 'Lucia', { background: '#e9a23b', borderRadius: '2px' }], ['concepts', 'Cocktail Club / Maison Mer', { background: '#2f8596', borderRadius: '2px' }],
     ['nb_live', 'Nikki Beach reviewing', { background: '#fff', border: '3px solid #2f8596' }], ['nb_declined', 'Declined by Nikki Beach', { background: '#e5532e', borderRadius: '2px' }], ['our_declined', 'Declined by us', { background: '#7d7a8c', borderRadius: '2px' }]];
   const layers = {};
@@ -567,7 +579,7 @@ function viewMap(main) {
   const boxBtn = h('button', { class: 'btn primary', 'data-keep': '1', onclick: () => setDropping(dropping === 'box' ? false : 'box') }, '+ Box');
   const shapeBtn = h('button', { class: 'btn primary', 'data-keep': '1', onclick: () => setDropping(dropping === 'shape' ? false : 'shape') }, '+ Draw shape');
   const hint = h('div', { class: 'map-hint', style: { display: 'none' } }, '');
-  main.append(topbar('Map', 'Candidate sites against the existing Nikki Beach footprint. Mark an area to search with a circle, a box or a shape you draw. Click a legend item to show or hide it.', h('div', { class: 'row', style: { gap: '6px' } }, dropBtn, boxBtn, shapeBtn)), legend, hint);
+  main.append(topbar('Map', 'Candidate sites against the existing Nikki Beach footprint. Mark a Discovery Area with a circle, a box or a shape you draw. Click a legend item to show or hide it.', h('div', { class: 'row', style: { gap: '6px' } }, dropBtn, boxBtn, shapeBtn)), legend, hint);
   const el = h('div', { class: 'map' });
   main.append(el);
   if (typeof L === 'undefined') { el.append(h('div', { class: 'empty' }, 'Map library did not load.')); return; }
@@ -721,14 +733,14 @@ function viewMap(main) {
         h('button', { class: 'btn sm primary', onclick: async () => { await save(a, f); drawn.get(a.id)?.pin.closePopup(); if (editingAreas.has(a.id)) setEditing(a, false); toast('Saved'); } }, 'Save'),
         editingAreas.has(a.id) ? h('button', { class: 'btn sm', onclick: () => { drawn.get(a.id)?.pin.closePopup(); setEditing(a, false); } }, 'Done editing') : h('button', { class: 'btn sm', onclick: () => { drawn.get(a.id)?.pin.closePopup(); setEditing(a, true); } }, 'Edit shape'),
         h('button', { class: 'btn sm', onclick: async () => { try { await save(a, f); const lead = await api('/api/leads', { method: 'POST', body: { name: f.name || 'New site', lat: a.lat, lng: a.lng, summary: f.notes || '' } }); await refreshLeads(); toast('Lead created'); navigate(`/lead/${lead.id}`); } catch (err) { toast(err.message, true); } } }, 'Make it a lead'),
-        h('button', { class: 'btn sm ghost danger', onclick: async () => { if (!confirm('Delete this search area?')) return; await api(`/api/areas/${a.id}`, { method: 'DELETE' }); undraw(a.id); editingAreas.delete(a.id); state.areas = state.areas.filter(x => x.id !== a.id); renderAreaList(); } }, 'Delete')));
+        h('button', { class: 'btn sm ghost danger', onclick: async () => { if (!confirm('Delete this Discovery Area?')) return; await api(`/api/areas/${a.id}`, { method: 'DELETE' }); undraw(a.id); editingAreas.delete(a.id); state.areas = state.areas.filter(x => x.id !== a.id); renderAreaList(); } }, 'Delete')));
   }
   const areaList = h('div', { class: 'card pad area-list' });
   function renderAreaList() {
     const list = state.areas || [];
-    areaList.replaceChildren(h('div', { class: 'eyebrow', style: { marginBottom: '8px' } }, list.length ? `Search areas · ${list.length}` : 'Search areas'),
+    areaList.replaceChildren(h('div', { class: 'eyebrow', style: { marginBottom: '8px' } }, list.length ? `Discovery Areas · ${list.length}` : 'Discovery Areas'),
       list.length ? h('table', { class: 'table' }, h('tbody', {}, list.map(a => h('tr', { onclick: () => { const d = drawn.get(a.id); map.fitBounds(d.circle.getBounds(), { padding: [40, 40] }); d.pin.openPopup(); el.scrollIntoView({ behavior: 'smooth', block: 'center' }); } },
-        h('td', {}, h('div', { class: 'lead-name' }, a.name || 'New search area'), h('div', { class: 'lead-loc' }, a.notes || '')), h('td', {}, a.assigned_to || h('span', { class: 'muted' }, 'nobody yet')), h('td', { style: { whiteSpace: 'nowrap' } }, sizeLabel(a)))))) : h('div', { class: 'small muted' }, 'None yet. Press "+ Circle", "+ Box" or "+ Draw shape" above the map to mark where someone should look.'));
+        h('td', {}, h('div', { class: 'lead-name' }, a.name || 'New Discovery Area'), h('div', { class: 'lead-loc' }, a.notes || '')), h('td', {}, a.assigned_to || h('span', { class: 'muted' }, 'nobody yet')), h('td', { style: { whiteSpace: 'nowrap' } }, sizeLabel(a)))))) : h('div', { class: 'small muted' }, 'None yet. Press "+ Circle", "+ Box" or "+ Draw shape" above the map to mark where someone should look.'));
   }
   main.append(areaList);
   (async () => { try { state.areas = await api('/api/areas'); } catch { state.areas = []; } for (const a of state.areas) drawArea(a); renderAreaList(); })();
