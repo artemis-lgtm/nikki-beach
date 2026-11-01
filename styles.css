@@ -478,3 +478,16 @@ select.temp-pick option { color: #111; background: #fff; text-transform: upperca
 .report-table td { vertical-align: top; }
 @media print { .onepager .report-table { font-size: 10.5px; } .onepager .card { border: 0; box-shadow: none; } }
 @media print { .no-print { display: none !important; } }
+/* 11/1 Peter: reorder the views list; area gallery; Winner/loser overview */
+.view-move { display: none; gap: 0; }
+.view-item:hover .view-move, .view-item.active .view-move { display: inline-flex; }
+.view-move .view-edit { font-size: 9px; padding: 0 3px; }
+.area-shot { height: 170px; }
+.wl-overview { display: grid; gap: 8px; margin-top: 10px; }
+.wl-row { display: grid; grid-template-columns: minmax(140px, 260px) 1fr auto; gap: 12px; align-items: center; }
+.wl-label { font-size: 13px; font-weight: 600; color: var(--ink); }
+.wl-bar { display: flex; height: 10px; border-radius: 999px; overflow: hidden; background: var(--surface-soft); }
+.wl-bar i { display: block; } .wl-bar .y { background: var(--ok); } .wl-bar .f { background: var(--warm); } .wl-bar .n { background: var(--hot); } .wl-bar .o { background: var(--surface-strong); }
+.wl-count { white-space: nowrap; }
+.wl-big { font-size: 34px; font-weight: 600; color: var(--ink); }
+@media (max-width: 700px) { .wl-row { grid-template-columns: 1fr; gap: 4px; } }

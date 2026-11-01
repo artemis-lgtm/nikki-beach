@@ -90,7 +90,8 @@ async function loadAll() {
   [state.config, state.leads, state.orgs, state.contacts, state.footprint] = await Promise.all([api('/api/config'), api('/api/leads'), api('/api/orgs'), api('/api/contacts'), api('/api/footprint')]);
   state.destinations = await api('/api/destinations').catch(() => []);   // 10/27 Peter: market profile per pin
   state.views = await api('/api/views').catch(() => []);
-  state.areas = await api('/api/areas').catch(() => []);   // 11/1 Peter: Discovery Areas list on the Overview                  // 10/28 Peter: saved views down the left of the Overview
+  state.areas = await api('/api/areas').catch(() => []);
+  state.viewOrder = await api('/api/view-order').catch(() => []);   // 11/1 Peter: Discovery Areas list on the Overview                  // 10/28 Peter: saved views down the left of the Overview
 }
 async function refreshLeads() { state.leads = await api('/api/leads'); }
 
@@ -287,7 +288,9 @@ const BUILTIN_VIEWS = [
   { id: 'declined', name: 'Declined by us', source: 'declined', builtin: true },   // 11/1 Peter: our own declines get their own list
   { id: 'areas', name: 'Discovery Areas', source: 'areas', builtin: true },   // 11/1 Peter: the map's areas as a list (renamed from search areas)
 ];
-const allViews = () => [...BUILTIN_VIEWS, ...(state.views || [])];
+const allViews = () => { const vs = [...BUILTIN_VIEWS, ...(state.views || [])]; const ord = state.viewOrder || []; const rank = (v) => { const i = ord.indexOf(v.id); return i < 0 ? 1000 + vs.indexOf(v) : i; }; return vs.sort((a, b) => rank(a) - rank(b)); };
+// 11/1 Peter: move a list up or down on the left; the order is saved for everyone
+async function moveView(id, dir) { const ids = allViews().map(v => v.id); const i = ids.indexOf(id), j = i + dir; if (i < 0 || j < 0 || j >= ids.length) return; [ids[i], ids[j]] = [ids[j], ids[i]]; state.viewOrder = ids; try { state.viewOrder = await api('/api/view-order', { method: 'PUT', body: ids }); } catch (err) { toast(err.message, true); } }
 const lsGet = (k, d) => { try { return localStorage.getItem(k) ?? d; } catch { return d; } };
 const lsSet = (k, v) => { try { localStorage.setItem(k, v); } catch {} };
 const isAirtableLead = (l) => !!l.airtable;
@@ -453,6 +456,26 @@ function viewReport(main) {
   draw();
   api('/api/report-entries').then(list => { state.reportEntries = list; draw(); }).catch(() => {});
 }
+// 11/1 Peter: Discovery Areas as a gallery. Each card's picture is a satellite snapshot of the area with its outline drawn on it.
+function areaCard(a) {
+  const el = h('div', { class: 'g-head area-shot' });
+  const card = h('div', { class: 'g-card', tabindex: '0', onclick: () => { state.mapFocus = areaPts(a); navigate('/map'); } }, el,
+    h('div', { class: 'g-body' }, h('div', { class: 'g-title' }, h('span', { style: { display: 'inline-block', width: '10px', height: '10px', borderRadius: '50%', background: a.color || '#e94d8c', marginRight: '8px' } }), a.name || 'New Discovery Area'),
+      h('div', { class: 'g-place' }, [a.assigned_to ? 'Looking: ' + a.assigned_to : '', fmt.date(a.created_at)].filter(Boolean).join(' · ')),
+      a.notes ? h('div', { class: 'g-intro' }, a.notes) : null));
+  if (typeof L !== 'undefined') {
+    const io = new IntersectionObserver((es) => { if (!es.some(e => e.isIntersecting)) return; io.disconnect(); liveObservers.delete(io);
+      const m = L.map(el, { zoomControl: false, attributionControl: false, dragging: false, scrollWheelZoom: false, doubleClickZoom: false, boxZoom: false, keyboard: false, touchZoom: false, fadeAnimation: false, zoomAnimation: false });
+      L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', { maxZoom: 19 }).addTo(m);
+      const col = a.color || '#e94d8c', style = { color: col, weight: 2.5, fillColor: col, fillOpacity: 0.25, interactive: false };
+      let sh = null; try { sh = a.shape_json ? JSON.parse(a.shape_json) : null; } catch {}
+      const layer = sh?.points?.length >= 3 ? L.polygon(sh.points, style) : L.circle([a.lat, a.lng], { radius: a.radius_m || 2000, ...style });
+      layer.addTo(m); m.fitBounds(sh?.points?.length >= 3 ? layer.getBounds() : L.latLng(a.lat, a.lng).toBounds((a.radius_m || 2000) * 2), { padding: [14, 14] }); liveMaps.add(m); }, { rootMargin: '300px' });
+    setTimeout(() => io.observe(el), 0); liveObservers.add(io);
+  }
+  return card;
+}
+const areaPts = (a) => { try { const sh = a.shape_json ? JSON.parse(a.shape_json) : null; if (sh?.points?.length) return sh.points; } catch {} return [[a.lat, a.lng]]; };
 function viewPipeline(main) {
   const f = state.filters;
   if (!state.viewId) state.viewId = lsGet('nb_view', 'all');
@@ -469,6 +492,7 @@ function viewPipeline(main) {
     viewList.replaceChildren(...allViews().map(x => h('div', { class: `view-item${x.id === v.id ? ' active' : ''}`, onclick: () => { state.viewId = x.id; lsSet('nb_view', x.id); v = x; layout = lsGet(`nb_layout_${v.id}`, v.layout || 'grid'); drawPanel(); draw(); } },
       h('span', { class: 'view-ico', html: lsGet(`nb_layout_${x.id}`, x.layout || 'grid') === 'gallery' ? '<svg viewBox="0 0 16 16" width="14" height="14"><path d="M2 2h5v5H2zM9 2h5v5H9zM2 9h5v5H2zM9 9h5v5H9z" fill="none" stroke="currentColor" stroke-width="1.4"/></svg>' : '<svg viewBox="0 0 16 16" width="14" height="14"><path d="M2 3h12v10H2zM2 6.5h12M2 10h12M6 3v10" fill="none" stroke="currentColor" stroke-width="1.4"/></svg>' }),
       h('span', { class: 'view-name' }, x.name), h('span', { class: 'n' }, viewLeads(x).length),
+      h('span', { class: 'view-move' }, h('button', { class: 'view-edit', title: 'Move up', 'data-keep': '1', onclick: async (e) => { e.stopPropagation(); await moveView(x.id, -1); drawPanel(); } }, '\u25B2'), h('button', { class: 'view-edit', title: 'Move down', 'data-keep': '1', onclick: async (e) => { e.stopPropagation(); await moveView(x.id, 1); drawPanel(); } }, '\u25BC')),
       x.builtin ? null : h('button', { class: 'view-edit', title: 'Edit view', 'data-keep': '1', onclick: (e) => { e.stopPropagation(); viewModal(x); } }, '⋯'))));
     layoutBtns.replaceChildren(...[['grid', 'Grid'], ['gallery', 'Gallery']].map(([k, t]) => h('button', { class: `btn sm${layout === k ? ' on' : ''}`, 'data-keep': '1', onclick: () => { layout = k; lsSet(`nb_layout_${v.id}`, k); drawPanel(); draw(); } }, t)));
   };
@@ -483,6 +507,7 @@ function viewPipeline(main) {
     if (v.source === 'areas') {   // 11/1 Peter: Discovery Areas list; a click opens the map on that area
       const q = (f.q || '').toLowerCase();
       const areas = (state.areas || []).filter(a => !q || [a.name, a.assigned_to, a.notes].join(' ').toLowerCase().includes(q));
+      if (layout === 'gallery' && areas.length) { wrap.replaceChildren(h('div', { class: 'gallery' }, areas.map(areaCard))); return; }
       wrap.replaceChildren(areas.length ? h('div', { class: 'card wide-scroll' }, h('table', { class: 'table' },
         h('thead', {}, h('tr', {}, ['Discovery Area', 'Who is looking', 'What to look for', 'Added'].map(t => h('th', {}, t)))),
         h('tbody', {}, areas.map(a => h('tr', { onclick: () => { state.mapFocus = [[a.lat, a.lng]]; navigate('/map'); } },
@@ -1279,6 +1304,11 @@ function checklistTab(lead, save) {
     const y = window.scrollY;
     const verdict = fatal.length ? 'Loser: a knock-out failed' : fixable.length ? `Conditional: ${fixable.length} knock-out(s) fixable, capped at warm` : unk.length ? `${yes} winner traits, ${unk.length} knock-outs still to verify` : (yes >= all.length * 0.7 && no <= 2 ? 'Looks like a winner' : `${yes} of ${all.length} winner traits confirmed`);
     wrap.replaceChildren(...[
+      // 11/1 Peter: an overview at the top. Each section's yes / no / open count, the share of answered questions that came back yes, and the verdict.
+      h('div', { class: 'card pad', style: { marginBottom: '16px' } }, h('div', { class: 'eyebrow' }, pt ? `Overview · ${(cl.product_types.find(x => x[0] === pt) || [, pt])[1]}` : 'Overview · pick a product type below'),
+        h('div', { class: 'wl-overview' }, cl.sections.filter(sec => sec.items.some(i => !i.gate && shown(sec, i))).map(sec => { const its = sec.items.filter(i => !i.gate && shown(sec, i)); const y = its.filter(i => eff[i.key] === 'yes').length, n = its.filter(i => eff[i.key] === 'no').length, f = its.filter(i => eff[i.key] === 'fixable').length, open = its.length - y - n - f;
+          return h('div', { class: 'wl-row' }, h('div', { class: 'wl-label' }, sec.label), h('div', { class: 'wl-bar' }, h('i', { class: 'y', style: { flex: y } }), h('i', { class: 'f', style: { flex: f } }), h('i', { class: 'n', style: { flex: n } }), h('i', { class: 'o', style: { flex: open } })), h('div', { class: 'small muted wl-count' }, `${y} yes · ${n + f ? `${n} no${f ? ` · ${f} fixable` : ''} · ` : ''}${open} open`)); })),
+        (() => { const answered = all.filter(i => ['yes', 'no', 'fixable'].includes(eff[i.key])).length; const pct = answered ? Math.round(yes / answered * 100) : 0; return h('div', { style: { marginTop: '12px', display: 'flex', gap: '18px', flexWrap: 'wrap', alignItems: 'baseline' } }, h('div', { class: 'wl-big' }, answered ? `${pct}%` : '–'), h('div', { class: 'small' }, answered ? `${yes} of ${answered} answered questions came back yes; ${all.length - answered} still open.` : 'Nothing answered yet.')); })()),
       h('div', { class: 'card pad', style: { marginBottom: '16px' } }, h('h2', {}, verdict), h('div', { class: 'small muted' }, cl.intro || ''), fatal.map(i => h('div', { class: 'ko', style: { marginTop: '10px' } }, `Fatal: ${i.label}`))),
       h('div', { class: 'card pad', style: { marginBottom: '16px' } }, h('div', { class: 'field', style: { margin: 0 } }, h('label', {}, 'Type of product'),
         h('select', { class: 'input', 'data-keep': '1', style: { maxWidth: '360px' }, onchange: async (e) => { answers.product_type = e.target.value || undefined; if (!answers.product_type) delete answers.product_type; await save({ checklist: answers, touch: false }); draw(); } },
