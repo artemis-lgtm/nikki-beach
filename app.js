@@ -364,10 +364,17 @@ function leadPopup(l) {
     h('div', { class: 'modal-foot' },
       l.airtable?.url ? h('a', { class: 'btn', href: l.airtable.url, target: '_blank', rel: 'noopener', style: { marginRight: 'auto' } }, 'Open in Airtable') : null,
       h('button', { class: `btn${l.declined_at ? '' : ' decline'}`, 'data-keep': '1', onclick: () => declineLead(l, () => { close(); render(); }) }, l.declined_at ? 'Undo decline' : 'Decline'),
+      h('button', { class: 'btn ghost danger', 'data-keep': '1', onclick: () => deleteLead(l, () => { close(); render(); }) }, 'Delete'),
       h('button', { class: 'btn ghost', 'data-keep': '1', onclick: close }, 'Close'),
       h('button', { class: 'btn primary', 'data-keep': '1', onclick: () => { close(); navigate(`/lead/${l.id}`); } }, 'Open full page'))));
   ov.dataset.unlocked = '1';
   document.body.append(ov);
+}
+// 11/1 Peter: delete a lead outright. The server keeps a copy, and an Airtable project stays deleted here even though the sync runs every 15 minutes.
+function deleteLead(l, after) {
+  const fromAirtable = !!l.airtable && !l.monday;
+  if (!confirm(`Delete ${l.name} from the database?${fromAirtable ? ' It stays in Nikki Beach\'s Airtable; it just won\'t come back into this app.' : ''} To keep a record of why we passed, use Decline instead.`)) return;
+  api(`/api/leads/${l.id}`, { method: 'DELETE' }).then(refreshLeads).then(() => { toast('Deleted'); after && after(); }).catch(err => toast(err.message, true));
 }
 // 11/1 Peter: decline from the list, the pop-up or the property page, and always say why (the monthly report reads it)
 function declineLead(l, after) {
@@ -544,7 +551,7 @@ function viewMap(main) {
   const el = h('div', { class: 'map' });
   main.append(el);
   if (typeof L === 'undefined') { el.append(h('div', { class: 'empty' }, 'Map library did not load.')); return; }
-  const map = L.map(el, { worldCopyJump: true }).setView([25, 5], 2); liveMaps.add(map);
+  const map = L.map(el, { worldCopyJump: true }).fitBounds([[24.4, -87.6], [31.0, -79.9]]); liveMaps.add(map);   // 11/1 Peter: open on Florida, not the whole world
   if (state.mapFocus) { const f = state.mapFocus; state.mapFocus = null; setTimeout(() => { map.invalidateSize(); f.length > 1 ? map.fitBounds(f, { padding: [60, 60], maxZoom: 15 }) : map.setView(f[0], 14); }, 80); }
   // 11/1 Peter: a satellite option. Esri World Imagery (free, no key) with place names on top; the choice is remembered.
   const streetBase = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors', maxZoom: 19 });
@@ -1036,7 +1043,8 @@ async function viewLead(main, id, tab) {
           } }, 'Done')]);
         who.addEventListener('keydown', (e) => { if (e.key === 'Enter') who.closest('.modal').querySelector('.btn.primary').click(); });
       } }, lead.handed_off_at ? 'Undo handoff' : 'Handoff'),
-      h('button', { class: `btn sm${lead.declined_at ? '' : ' decline'}`, 'data-keep': '1', title: lead.declined_at ? 'Bring this property back into play' : 'Pass on this property; it moves to Declined by us', onclick: () => declineLead(lead, () => render()) }, lead.declined_at ? 'Undo decline' : 'Decline')),
+      h('button', { class: `btn sm${lead.declined_at ? '' : ' decline'}`, 'data-keep': '1', title: lead.declined_at ? 'Bring this property back into play' : 'Pass on this property; it moves to Declined by us', onclick: () => declineLead(lead, () => render()) }, lead.declined_at ? 'Undo decline' : 'Decline'),
+      h('button', { class: 'btn sm ghost danger', 'data-keep': '1', title: 'Remove this lead from the database', onclick: () => deleteLead(lead, () => navigate('/')) }, 'Delete')),
   ), h('div', { class: 'btn-row' },
     h('select', { class: 'input', style: { width: 'auto', borderRadius: '999px' }, onchange: (e) => moveStage(lead, e.target.value) }, state.config.stages.map(s => h('option', { value: s.key, selected: s.key === lead.stage }, s.label))),
     h('button', { class: 'btn ghost', onclick: () => statusModal(lead, save) }, lead.status === 'active' ? 'Park / lose / win' : 'Reactivate'),
@@ -1058,7 +1066,7 @@ async function viewLead(main, id, tab) {
     h('label', { class: 'gate-row' }, h('input', { type: 'checkbox', checked: !!lead.gates[lead.stage], onchange: (e) => save({ gates: { ...lead.gates, [lead.stage]: e.target.checked }, touch: false }) }), h('span', {}, st?.gate || '')),
     h('div', { class: 'small muted', style: { marginTop: '8px' } }, 'Default next action: ', st?.next || ''));
   const side = h('div', { class: 'side' },
-    airtableCard(lead),
+    // 11/1 Peter: the Airtable box on the property page is gone; the pop-up still shows their fields
     photoCard(lead),
     miniMap(lead),
     destCard(lead),
@@ -1194,7 +1202,7 @@ function scoreTab(lead, save) {
       ...Object.entries(card.groups).map(([gk, g]) => h('div', { class: 'card pad', style: { marginBottom: '16px' } }, h('div', { class: 'group-row', style: { marginBottom: '14px' } }, h('h3', {}, `${g.label} (${g.max} pts)`), h('div', { class: 'bar' }, h('i', { style: { width: `${lead.score.groups[gk] || 0}%` } })), h('span', { class: 'mono', style: { textAlign: 'right' } }, Math.round(lead.score.groups[gk] || 0))),
         card.criteria.filter(c => c.group === gk).map(c => h('div', { class: 'crit' },
           h('div', {}, h('div', { class: 'l' }, c.label, ' ', h('span', { class: 'w' }, `${c.weight} pts`)), h('div', { class: 'small muted' }, c.why || '')),
-          c.computed ? h('div', { class: 'pill' }, `${lead.score.per[c.key].value} from heat ${Math.round(lead.heat_score)}`) : h('div', { class: 'seg' }, [0, 1, 2, 3, 4, 5].map(v => h('button', { class: `${scores[c.key] === v ? 'on' : ''}${scores[c.key] == null && auto[c.key] === v ? ' auto' : ''}`, title: c.rubric?.[v] || '', onclick: async () => { if (scores[c.key] === v) delete scores[c.key]; else scores[c.key] = v; lead = await save({ scores, touch: false }); draw(); } }, v))),
+          c.computed ? h('div', { class: 'pill' }, `${lead.score.per[c.key].value} from heat ${Math.round(lead.heat_score)}`) : h('div', { class: 'seg' }, [0, 1, 2, 3, 4, 5].map(v => h('button', { 'data-keep': '1', class: `${scores[c.key] === v ? 'on' : ''}${scores[c.key] == null && auto[c.key] === v ? ' auto' : ''}`, title: c.rubric?.[v] || '', onclick: async () => { if (scores[c.key] === v) delete scores[c.key]; else scores[c.key] = v; lead = await save({ scores, touch: false }); draw(); } }, v))),
           h('div', { class: 'r' }, (c.computed ? lead.score.per[c.key].value : scores[c.key]) != null ? h('span', {}, h('b', {}, `${c.computed ? lead.score.per[c.key].value : scores[c.key]}: `), c.rubric?.[c.computed ? lead.score.per[c.key].value : scores[c.key]] || '') : h('span', {}, Object.entries(c.rubric || {}).sort((a, b) => b[0] - a[0]).map(([k, v]) => h('div', {}, h('b', {}, `${k} `), v)))),
         )))),
     ]);
@@ -1227,7 +1235,9 @@ function checklistTab(lead, save) {
   const draw = () => {
     // 11/1 Peter: two gate questions open the water section. If the site has no pool AND isn't on the ocean, the other water questions disappear and the water knock-out counts as failed.
     const noWater = answers.has_pool === 'no' && answers.on_ocean === 'no';
-    const shown = (sec, i) => !(sec.key === 'water' && noWater && !i.gate);
+    // 11/1 Peter: pick the product type first; only the questions that fit that type are shown
+    const pt = answers.product_type || '';
+    const shown = (sec, i) => !(sec.key === 'water' && noWater && !i.gate) && (!pt || !i.types || i.types.includes(pt));
     const eff = noWater ? { ...answers, ko_water: 'no' } : answers;
     const all = cl.sections.flatMap(s => s.items.filter(i => !i.gate && shown(s, i)).concat(noWater && s.key === 'water' ? s.items.filter(i => i.key === 'ko_water') : []));
     const yes = all.filter(i => eff[i.key] === 'yes').length, no = all.filter(i => eff[i.key] === 'no').length;
@@ -1238,9 +1248,13 @@ function checklistTab(lead, save) {
     const verdict = fatal.length ? 'Loser: a knock-out failed' : fixable.length ? `Conditional: ${fixable.length} knock-out(s) fixable, capped at warm` : unk.length ? `${yes} winner traits, ${unk.length} knock-outs still to verify` : (yes >= all.length * 0.7 && no <= 2 ? 'Looks like a winner' : `${yes} of ${all.length} winner traits confirmed`);
     wrap.replaceChildren(...[
       h('div', { class: 'card pad', style: { marginBottom: '16px' } }, h('h2', {}, verdict), h('div', { class: 'small muted' }, cl.intro || ''), fatal.map(i => h('div', { class: 'ko', style: { marginTop: '10px' } }, `Fatal: ${i.label}`))),
-      ...cl.sections.map(sec => h('div', { class: 'card pad', style: { marginBottom: '16px' } }, h('h3', { style: { marginBottom: '6px' } }, sec.label), sec.key === 'water' && noWater ? h('div', { class: 'ko', style: { margin: '6px 0 10px' } }, 'No pool and not on the ocean: no water, so this site fails the water knock-out. The other water questions are hidden.') : null, sec.items.filter(i => shown(sec, i)).map(i => h('div', { class: 'chk-item' },
+      h('div', { class: 'card pad', style: { marginBottom: '16px' } }, h('div', { class: 'field', style: { margin: 0 } }, h('label', {}, 'Type of product'),
+        h('select', { class: 'input', 'data-keep': '1', style: { maxWidth: '360px' }, onchange: async (e) => { answers.product_type = e.target.value || undefined; if (!answers.product_type) delete answers.product_type; await save({ checklist: answers, touch: false }); draw(); } },
+          h('option', { value: '' }, 'Choose the product type…'), (cl.product_types || []).map(([k, t]) => h('option', { value: k, selected: pt === k }, t)))),
+        h('div', { class: 'small muted', style: { marginTop: '6px' } }, pt ? 'Only the questions that apply to this type are shown.' : 'Pick one and the questions narrow to what matters for it.')),
+      ...cl.sections.filter(sec => sec.items.some(i => shown(sec, i))).map(sec => h('div', { class: 'card pad', style: { marginBottom: '16px' } }, h('h3', { style: { marginBottom: '6px' } }, sec.label), sec.key === 'water' && noWater ? h('div', { class: 'ko', style: { margin: '6px 0 10px' } }, 'No pool and not on the ocean: no water, so this site fails the water knock-out. The other water questions are hidden.') : null, sec.items.filter(i => shown(sec, i)).map(i => h('div', { class: 'chk-item' },
         h('div', {}, i.label, i.fatal ? h('span', { class: 'pill bad', style: { marginLeft: '8px' } }, 'knock-out') : null),
-        h('div', { class: 'tri' }, (i.fatal ? [['yes', 'Pass'], ['fixable', 'Fixable'], ['no', 'Fail'], ['unk', '?']] : [['yes', 'Yes'], ['no', 'No'], ['unk', '?']]).map(([v, l]) => h('button', { class: `${v}${(answers[i.key] || 'unk') === v ? ' on' : ''}`, onclick: async () => { if (v === 'unk' || answers[i.key] === v) delete answers[i.key]; else answers[i.key] = v; lead = await save({ checklist: answers, touch: false }, true); draw(); } }, l))),
+        h('div', { class: 'tri' }, (i.fatal ? [['yes', 'Pass'], ['fixable', 'Fixable'], ['no', 'Fail'], ['unk', '?']] : [['yes', 'Yes'], ['no', 'No'], ['unk', '?']]).map(([v, l]) => h('button', { 'data-keep': '1', class: `${v}${(answers[i.key] || 'unk') === v ? ' on' : ''}`, onclick: async () => { if (v === 'unk' || answers[i.key] === v) delete answers[i.key]; else answers[i.key] = v; lead = await save({ checklist: answers, touch: false }, true); draw(); } }, l))),
         i.fatal && answers[i.key] === 'fixable' ? h('input', { class: 'input', style: { gridColumn: '1 / -1' }, placeholder: 'The fix the counterparty must agree to in writing (e.g. floating swim platform in the marina basin)', value: answers[`${i.key}_fix`] || '', onchange: async (e) => { answers[`${i.key}_fix`] = e.target.value; lead = await save({ checklist: answers, touch: false }, true); } }) : null,
         i.hint ? h('div', { class: 'hint' }, i.hint) : null)))),
     ]);
