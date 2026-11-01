@@ -517,9 +517,12 @@ function viewMap(main) {
   let sketch = null;   // { start, rect } for box, { pts, line, dots } for shape
   function cancelSketch() { if (!sketch) return; for (const l of [sketch.rect, sketch.line, ...(sketch.dots || [])]) if (l) layers.areas.removeLayer(l); sketch = null; }
   const sketchStyle = { color: '#e94d8c', weight: 2, dashArray: '6 6', fillColor: '#e94d8c', fillOpacity: 0.12 };
+  // 11/1 Peter: an area stays editable only while you're shaping it. Saved areas are solid: no corner handles, no dragging.
+  const solidStyle = { color: '#e94d8c', weight: 2.5, dashArray: null, fillColor: '#e94d8c', fillOpacity: 0.22 };
+  const editingAreas = new Set();
   async function createShape(type, pts) {
     const c = centroid(pts);
-    try { const a = await api('/api/areas', { method: 'POST', body: { lat: c.lat, lng: c.lng, radius_m: Math.round(shapeRadius(pts, c)), shape: { type, points: pts.map(q => [q.lat, q.lng]) } } }); state.areas.push(a); const d = drawArea(a); d.pin.openPopup(); renderAreaList(); }
+    try { const a = await api('/api/areas', { method: 'POST', body: { lat: c.lat, lng: c.lng, radius_m: Math.round(shapeRadius(pts, c)), shape: { type, points: pts.map(q => [q.lat, q.lng]) } } }); state.areas.push(a); editingAreas.add(a.id); const d = drawArea(a); d.pin.openPopup(); renderAreaList(); }
     catch (err) { toast(err.message, true); }
   }
   map.on('mousedown', (e) => { if (dropping !== 'box') return; sketch = { start: e.latlng, rect: L.rectangle(L.latLngBounds(e.latlng, e.latlng), { ...sketchStyle, interactive: false }).addTo(layers.areas) }; });
@@ -549,7 +552,7 @@ function viewMap(main) {
     const zoomedOut = map.getZoom() < 9;   // dropped from the world view: zoom in to the pin and start with a 3 km circle
     const b = map.getBounds(); const radius = zoomedOut ? 3000 : Math.round(Math.max(150, Math.min(50000, b.getNorthEast().distanceTo(b.getSouthWest()) / 12)));
     if (zoomedOut) map.setView(e.latlng, 12);
-    try { const a = await api('/api/areas', { method: 'POST', body: { lat: e.latlng.lat, lng: e.latlng.lng, radius_m: radius } }); state.areas.push(a); const d = drawArea(a); d.pin.openPopup(); renderAreaList(); }
+    try { const a = await api('/api/areas', { method: 'POST', body: { lat: e.latlng.lat, lng: e.latlng.lng, radius_m: radius } }); state.areas.push(a); editingAreas.add(a.id); const d = drawArea(a); d.pin.openPopup(); renderAreaList(); }
     catch (err) { toast(err.message, true); }
   });
   const kmLabel = (m) => m >= 1000 ? `${(m / 1000).toFixed(m >= 10000 ? 0 : 1)} km (${(m / 1609.34).toFixed(m >= 16093 ? 0 : 1)} mi)` : `${Math.round(m)} m`;
@@ -563,9 +566,10 @@ function viewMap(main) {
   const sizeLabel = (a) => { const sh = shapeOf(a); if (!sh) return kmLabel(a.radius_m); const b = L.latLngBounds(sh.points); const w = b.getNorthWest().distanceTo(b.getNorthEast()), ht = b.getNorthWest().distanceTo(b.getSouthWest()); const k = (m) => m >= 1000 ? `${(m / 1000).toFixed(m >= 10000 ? 0 : 1)} km` : `${Math.round(m)} m`; return `${k(w)} × ${k(ht)}`; };
   function drawShape(a, sh) {
     let pts = sh.points.map(q => L.latLng(q[0], q[1]));
-    const poly = L.polygon(pts, { ...sketchStyle, interactive: false }).addTo(layers.areas);
-    const pin = L.marker(centroid(pts), { icon: pinIcon, draggable: true, zIndexOffset: 800, autoPan: true }).addTo(layers.areas);
-    const handles = pts.map((q, i) => L.marker(q, { icon: handleIcon, draggable: true, zIndexOffset: 900 }).addTo(layers.areas));
+    const ed = editingAreas.has(a.id);
+    const poly = L.polygon(pts, { ...(ed ? sketchStyle : solidStyle), interactive: false }).addTo(layers.areas);
+    const pin = L.marker(centroid(pts), { icon: pinIcon, draggable: ed, zIndexOffset: 800, autoPan: true }).addTo(layers.areas);
+    const handles = ed ? pts.map((q, i) => L.marker(q, { icon: handleIcon, draggable: true, zIndexOffset: 900 }).addTo(layers.areas)) : [];
     const persist = () => { const c = centroid(pts); a.lat = c.lat; a.lng = c.lng; save(a, { lat: c.lat, lng: c.lng, radius_m: Math.round(shapeRadius(pts, c)), shape: { type: sh.type, points: pts.map(q => [q.lat, q.lng]) } }); };
     const redraw = () => { poly.setLatLngs(pts); handles.forEach((hd, i) => hd.setLatLng(pts[i])); pin.setLatLng(centroid(pts)); };
     handles.forEach((hd, i) => {
@@ -589,18 +593,21 @@ function viewMap(main) {
   function drawArea(a) {
     const sh = shapeOf(a); if (sh) return drawShape(a, sh);
     const center = L.latLng(a.lat, a.lng);
-    const circle = L.circle(center, { radius: a.radius_m, color: '#e94d8c', weight: 2, dashArray: '6 6', fillColor: '#e94d8c', fillOpacity: 0.12, interactive: false }).addTo(layers.areas);
-    const pin = L.marker(center, { icon: pinIcon, draggable: true, zIndexOffset: 800, autoPan: true }).addTo(layers.areas);
+    const ed = editingAreas.has(a.id);
+    const circle = L.circle(center, { radius: a.radius_m, ...(ed ? sketchStyle : solidStyle), interactive: false }).addTo(layers.areas);
+    const pin = L.marker(center, { icon: pinIcon, draggable: ed, zIndexOffset: 800, autoPan: true }).addTo(layers.areas);
+    pin.bindPopup(() => areaPopup(a), { minWidth: 260 });
+    if (!ed) { const d = { circle, pin, handle: null }; drawn.set(a.id, d); return d; }
     const handle = L.marker(edgeOf(center, a.radius_m), { icon: handleIcon, draggable: true, zIndexOffset: 900 }).addTo(layers.areas);
-    const tip = () => handle.bindTooltip(kmLabel(a.radius_m), { permanent: false, direction: 'right' });
-    tip();
+    handle.bindTooltip(kmLabel(a.radius_m), { permanent: false, direction: 'right' });
     pin.on('drag', () => { const c = pin.getLatLng(); circle.setLatLng(c); handle.setLatLng(edgeOf(c, a.radius_m)); });
     pin.on('dragend', () => { const c = pin.getLatLng(); a.lat = c.lat; a.lng = c.lng; save(a, { lat: a.lat, lng: a.lng }); pin.openPopup(); });   // Austin 10/5: details pop back up once the pin lands
     handle.on('drag', () => { a.radius_m = Math.min(200000, Math.max(50, pin.getLatLng().distanceTo(handle.getLatLng()))); circle.setRadius(a.radius_m); handle.setTooltipContent(kmLabel(a.radius_m)); handle.openTooltip(); });
     handle.on('dragend', () => { handle.setLatLng(edgeOf(pin.getLatLng(), a.radius_m)); save(a, { radius_m: Math.round(a.radius_m) }); });
-    pin.bindPopup(() => areaPopup(a), { minWidth: 260 });
     const d = { circle, pin, handle }; drawn.set(a.id, d); return d;
   }
+  function undraw(id) { const d = drawn.get(id); if (!d) return; for (const l of [d.circle, d.pin, d.handle, ...(d.extra || [])]) if (l) layers.areas.removeLayer(l); drawn.delete(id); }
+  function setEditing(a, on) { on ? editingAreas.add(a.id) : editingAreas.delete(a.id); undraw(a.id); const d = drawArea(a); if (on) d.pin.openPopup(); }
   async function save(a, patch) { try { Object.assign(a, await api(`/api/areas/${a.id}`, { method: 'PATCH', body: patch })); renderAreaList(); } catch (err) { toast(err.message, true); } }
   function areaPopup(a) {
     const f = { name: a.name || '', assigned_to: a.assigned_to || '', notes: a.notes || '' };
@@ -609,11 +616,12 @@ function viewMap(main) {
       h('div', { class: 'field' }, h('label', {}, 'Name'), h('input', { value: f.name, oninput: (e) => f.name = e.target.value, placeholder: 'e.g. Sunny Isles beachfront' })),
       h('div', { class: 'field' }, h('label', {}, 'Who should look'), h('input', { value: f.assigned_to, list: 'area-users', oninput: (e) => f.assigned_to = e.target.value, placeholder: 'employee or broker' }), h('datalist', { id: 'area-users' }, users.map(u => h('option', { value: u })))),
       h('div', { class: 'field' }, h('label', {}, 'What to look for'), h('textarea', { rows: 3, oninput: (e) => f.notes = e.target.value }, f.notes)),
-      h('div', { class: 'small muted', style: { margin: '2px 0 10px' } }, shapeOf(a) ? `${shapeOf(a).type === 'box' ? 'Box' : 'Shape'} about ${sizeLabel(a)} · drag the white corners to reshape, the pin to move it` : `Radius ${kmLabel(a.radius_m)} · drag the white dot to change it`),
+      h('div', { class: 'small muted', style: { margin: '2px 0 10px' } }, editingAreas.has(a.id) ? (shapeOf(a) ? `${shapeOf(a).type === 'box' ? 'Box' : 'Shape'} about ${sizeLabel(a)} · drag the white corners to reshape, the pin to move it` : `Radius ${kmLabel(a.radius_m)} · drag the white dot to change it`) : `${shapeOf(a) ? (shapeOf(a).type === 'box' ? 'Box' : 'Shape') + ' about ' + sizeLabel(a) : 'Radius ' + kmLabel(a.radius_m)} · locked. Press Edit shape to move or reshape it.`),
       h('div', { class: 'row', style: { gap: '6px', flexWrap: 'wrap' } },
-        h('button', { class: 'btn sm primary', onclick: async () => { await save(a, f); drawn.get(a.id)?.pin.closePopup(); toast('Saved'); } }, 'Save'),
+        h('button', { class: 'btn sm primary', onclick: async () => { await save(a, f); drawn.get(a.id)?.pin.closePopup(); if (editingAreas.has(a.id)) setEditing(a, false); toast('Saved'); } }, 'Save'),
+        editingAreas.has(a.id) ? h('button', { class: 'btn sm', onclick: () => { drawn.get(a.id)?.pin.closePopup(); setEditing(a, false); } }, 'Done editing') : h('button', { class: 'btn sm', onclick: () => { drawn.get(a.id)?.pin.closePopup(); setEditing(a, true); } }, 'Edit shape'),
         h('button', { class: 'btn sm', onclick: async () => { try { await save(a, f); const lead = await api('/api/leads', { method: 'POST', body: { name: f.name || 'New site', lat: a.lat, lng: a.lng, summary: f.notes || '' } }); await refreshLeads(); toast('Lead created'); navigate(`/lead/${lead.id}`); } catch (err) { toast(err.message, true); } } }, 'Make it a lead'),
-        h('button', { class: 'btn sm ghost danger', onclick: async () => { if (!confirm('Delete this search area?')) return; await api(`/api/areas/${a.id}`, { method: 'DELETE' }); const d = drawn.get(a.id); if (d) { for (const l of [d.circle, d.pin, d.handle, ...(d.extra || [])]) if (l) layers.areas.removeLayer(l); drawn.delete(a.id); } state.areas = state.areas.filter(x => x.id !== a.id); renderAreaList(); } }, 'Delete')));
+        h('button', { class: 'btn sm ghost danger', onclick: async () => { if (!confirm('Delete this search area?')) return; await api(`/api/areas/${a.id}`, { method: 'DELETE' }); undraw(a.id); editingAreas.delete(a.id); state.areas = state.areas.filter(x => x.id !== a.id); renderAreaList(); } }, 'Delete')));
   }
   const areaList = h('div', { class: 'card pad area-list' });
   function renderAreaList() {
