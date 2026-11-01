@@ -477,3 +477,4 @@ select.temp-pick option { color: #111; background: #fff; text-transform: upperca
 .marker.ourx::after { transform: translate(-50%, -50%) rotate(-45deg); }
 .report-table td { vertical-align: top; }
 @media print { .onepager .report-table { font-size: 10.5px; } .onepager .card { border: 0; box-shadow: none; } }
+@media print { .no-print { display: none !important; } }

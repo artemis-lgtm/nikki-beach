@@ -404,7 +404,22 @@ function reportRows(ym) {
     if (inMonth(l.declined_at)) rows.push({ kind: 'Declined by us', date: l.declined_at, l, addr });
     if (inMonth(l.handed_off_at)) rows.push({ kind: 'Handed off', date: l.handed_off_at, l, addr });
   }
+  for (const e of state.reportEntries || []) if (localYm(e.date + 'T12:00:00') === ym) rows.push({ kind: 'Other activity', date: e.date + 'T12:00:00', entry: e, addr: '' });
   return rows.sort((a, b) => Date.parse(a.date) - Date.parse(b.date));
+}
+// 11/1 Peter: the + on the report page logs activity that isn't tied to a property
+function addReportEntry(after) {
+  const date = h('input', { class: 'input', type: 'date', value: new Date().toLocaleDateString('en-CA') });
+  const title = h('input', { class: 'input', placeholder: 'What happened, e.g. Met Kolter at BDNY' });
+  const status = h('input', { class: 'input', placeholder: 'Status, e.g. Follow-up booked (optional)' });
+  const note = h('textarea', { class: 'input', rows: 3, placeholder: 'Why it matters or what comes next (optional)' });
+  const row = (l, el) => h('div', { class: 'field', style: { marginBottom: '10px' } }, h('label', {}, l), el);
+  const ov = modal('Add activity', 'For things that belong in the monthly report but are not about one property.', h('div', {}, row('Date', date), row('What happened', title), row('Status', status), row('Notes', note)), (close) => [
+    h('button', { class: 'btn primary', 'data-keep': '1', onclick: async () => {
+      if (!title.value.trim()) { title.focus(); return toast('Say what happened', true); }
+      try { state.reportEntries = await api('/api/report-entries', { method: 'POST', body: { date: date.value, title: title.value.trim(), status: status.value.trim(), note: note.value.trim() } }); close(); toast('Added'); after && after(); } catch (err) { toast(err.message, true); }
+    } }, 'Add')]);
+  ov.dataset.unlocked = '1';
 }
 function viewReport(main) {
   const now = new Date(); const months = [];
@@ -414,22 +429,27 @@ function viewReport(main) {
   const pick = h('select', { class: 'input', 'data-keep': '1', style: { width: 'auto', borderRadius: '999px' }, onchange: (e) => { ym = state.reportMonth = e.target.value; draw(); } }, months.map(m => h('option', { value: m, selected: m === ym }, monthName(m))));
   const wrap = h('div', {});
   const csv = () => { const rows = reportRows(ym); const q = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
-    const out = [['Date', 'What happened', 'Project', 'Address', 'Status now', 'Why'].join(','), ...rows.map(r => [fmt.date(r.date), r.kind, r.l.name, r.addr, leadStatusText(r.l), leadWhy(r.l)].map(q).join(','))].join('\n');
+    const out = [['Date', 'What happened', 'Project', 'Address', 'Status now', 'Why'].join(','), ...rows.map(r => (r.entry ? [fmt.date(r.date), r.kind, r.entry.title, '', r.entry.status || '', r.entry.note || ''] : [fmt.date(r.date), r.kind, r.l.name, r.addr, leadStatusText(r.l), leadWhy(r.l)]).map(q).join(','))].join('\n');
     const a = document.createElement('a'); a.download = `Nikki Beach activity ${ym}.csv`; a.href = URL.createObjectURL(new Blob([out], { type: 'text/csv' })); a.click(); };
   const table = (rows) => h('table', { class: 'table report-table' }, h('thead', {}, h('tr', {}, ['Date', 'What happened', 'Project', 'Address', 'Status now', 'Why'].map(t => h('th', {}, t)))),
-    h('tbody', {}, rows.map(r => h('tr', { onclick: () => leadPopup(r.l) }, h('td', { style: { whiteSpace: 'nowrap' } }, fmt.date(r.date)), h('td', {}, h('span', { class: 'pill', style: { whiteSpace: 'nowrap' } }, r.kind)), h('td', { class: 'lead-name' }, r.l.name), h('td', { class: 'small' }, r.addr), h('td', { class: 'small' }, leadStatusText(r.l)), h('td', { class: 'small', style: { maxWidth: '380px' } }, leadWhy(r.l))))));
+    h('tbody', {}, rows.map(r => r.entry
+      ? h('tr', {}, h('td', { style: { whiteSpace: 'nowrap' } }, fmt.date(r.date)), h('td', {}, h('span', { class: 'pill', style: { whiteSpace: 'nowrap' } }, r.kind)), h('td', { class: 'lead-name' }, r.entry.title), h('td', { class: 'small' }, ''), h('td', { class: 'small' }, r.entry.status || ''),
+          h('td', { class: 'small', style: { maxWidth: '380px' } }, r.entry.note || '', ' ', h('button', { class: 'btn sm ghost danger no-print', 'data-keep': '1', title: 'Remove this entry', onclick: async () => { if (!confirm('Remove this activity entry?')) return; state.reportEntries = await api('/api/report-entries', { method: 'DELETE', body: { id: r.entry.id } }); draw(); } }, 'Remove')))
+      : h('tr', { onclick: () => leadPopup(r.l) }, h('td', { style: { whiteSpace: 'nowrap' } }, fmt.date(r.date)), h('td', {}, h('span', { class: 'pill', style: { whiteSpace: 'nowrap' } }, r.kind)), h('td', { class: 'lead-name' }, r.l.name), h('td', { class: 'small' }, r.addr), h('td', { class: 'small' }, leadStatusText(r.l)), h('td', { class: 'small', style: { maxWidth: '380px' } }, leadWhy(r.l))))));
   function draw() {
     const rows = reportRows(ym); const n = (k) => rows.filter(r => r.kind === k).length;
     wrap.replaceChildren(h('div', { class: 'card pad wide-scroll' },
       h('div', { class: 'eyebrow' }, `Higney International · Nikki Beach business development · ${monthName(ym)}`),
       h('h2', { style: { margin: '6px 0 4px' } }, `Activity report, ${monthName(ym)}`),
-      h('div', { class: 'small muted', style: { marginBottom: '14px' } }, `${n('Added')} added · ${n('Declined by us')} declined by us · ${n('Handed off')} handed off`),
+      h('div', { class: 'small muted', style: { marginBottom: '14px' } }, `${n('Added')} added · ${n('Declined by us')} declined by us · ${n('Handed off')} handed off${n('Other activity') ? ` · ${n('Other activity')} other activity` : ''}`),
       rows.length ? table(rows) : h('div', { class: 'empty' }, 'Nothing happened in this month yet.')));
   }
-  main.append(topbar('Monthly report', 'Everything we added, declined or handed off in a month, with the date, address, status and why. Print it or download it.', pick,
+  main.append(topbar('Monthly report', 'Everything we added, declined or handed off in a month, with the date, address, status and why. Press + Add activity for anything not tied to one property.', pick,
+    h('button', { class: 'btn', 'data-keep': '1', onclick: () => addReportEntry(draw) }, '+ Add activity'),
     h('button', { class: 'btn', 'data-keep': '1', onclick: csv }, 'Download CSV'),
     h('button', { class: 'btn primary', 'data-keep': '1', onclick: () => { const p = h('div', { class: 'onepager' }, wrap.firstChild.cloneNode(true)); document.body.append(p); window.print(); setTimeout(() => p.remove(), 500); } }, 'Print / PDF')), wrap);
   draw();
+  api('/api/report-entries').then(list => { state.reportEntries = list; draw(); }).catch(() => {});
 }
 function viewPipeline(main) {
   const f = state.filters;
