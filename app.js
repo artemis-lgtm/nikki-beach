@@ -209,7 +209,7 @@ function mondayCell(l, title) {
   if (title === 'Price' || title === 'Price per sqft' || title === 'Rent $/SF/yr') return h('td', { class: 'mono', style: { textAlign: 'right' } }, '$' + num(t).toLocaleString('en-US', { maximumFractionDigits: 2 }));
   if (c.type === 'numbers') return h('td', { class: 'mono', style: { textAlign: 'right' } }, num(t).toLocaleString('en-US'));
   if (title === 'Rating') return h('td', { style: { color: 'var(--warm)', whiteSpace: 'nowrap' } }, '★'.repeat(num(t)) + '☆'.repeat(Math.max(0, 5 - num(t))));
-  if (title === 'Images') { const n = t.split(', ').length; return h('td', {}, h('a', { href: l.monday.url, target: '_blank', class: 'pill', onclick: (e) => e.stopPropagation() }, `${n} file${n > 1 ? 's' : ''}`)); }
+  if (title === 'Images') { const n = t.split(', ').length; return h('td', {}, h('span', { class: 'pill' }, `${n} photo${n > 1 ? 's' : ''}`)); }   // 11/1 Peter: no links out to Monday
   if (title === 'Listing') { const url = (t.match(/https?:\/\/\S+/) || [])[0]; const label = t.includes(' - ') ? t.split(' - ')[0] : (url ? url.replace(/^https?:\/\/(www\.)?/, '').replace(/\/.*$/, '') : t); return h('td', {}, url ? h('a', { href: url, target: '_blank', onclick: (e) => e.stopPropagation() }, label) : label); }
   if (title === 'Listing status' || title === 'Property Type' || title === 'Type') return h('td', {}, h('span', { class: 'pill', style: { whiteSpace: 'nowrap' } }, t));
   if (title === 'Notes') return h('td', { class: 'small', title: t, style: { minWidth: '260px', maxWidth: '360px' } }, t.length > 140 ? t.slice(0, 140) + '…' : t);
@@ -363,7 +363,6 @@ function leadPopup(l) {
       ...md.map(c => kv(c.title, c.text))),
     h('div', { class: 'modal-foot' },
       l.airtable?.url ? h('a', { class: 'btn', href: l.airtable.url, target: '_blank', rel: 'noopener', style: { marginRight: 'auto' } }, 'Open in Airtable') : null,
-      l.monday?.url ? h('a', { class: 'btn', href: l.monday.url, target: '_blank', rel: 'noopener', style: l.airtable?.url ? {} : { marginRight: 'auto' } }, 'Open in Monday') : null,
       h('button', { class: `btn${l.declined_at ? '' : ' decline'}`, 'data-keep': '1', onclick: () => declineLead(l, () => { close(); render(); }) }, l.declined_at ? 'Undo decline' : 'Decline'),
       h('button', { class: 'btn ghost', 'data-keep': '1', onclick: close }, 'Close'),
       h('button', { class: 'btn primary', 'data-keep': '1', onclick: () => { close(); navigate(`/lead/${l.id}`); } }, 'Open full page'))));
@@ -464,7 +463,7 @@ function viewPipeline(main) {
     // 10/14 Austin: Nikki Beach's own Airtable projects get groups by THEIR status, so what Nikki Beach declined is obvious
     const bucket = (l) => l.declined_at ? ['Declined', '#e5532e', 2000] : l.handed_off_at ? ['Handed Off', '#7d7a8c', 1000]
       : (l.airtable && !l.monday) ? nbGroup(l.airtable.status)
-      : [l.monday?.group || 'Not on Monday yet', l.monday?.group_color || 'var(--muted)', l.monday?.group_order ?? 99];
+      : [l.monday?.group || 'Our leads', l.monday?.group_color || 'var(--muted)', l.monday?.group_order ?? 99];   // 11/1 Peter: Monday is retired; the group names it left behind stay as our own
     for (const l of [...ls].sort((a, b) => (bucket(a)[2] - bucket(b)[2]) || ((a.monday?.item_order ?? a.airtable?.item_order ?? 999) - (b.monday?.item_order ?? b.airtable?.item_order ?? 999)))) {
       const [g, gc] = bucket(l);
       if (!groups.has(g)) groups.set(g, { color: gc, leads: [] });
@@ -897,7 +896,7 @@ function viewPlaybook(main) {
 function photoCard(lead) {
   const imgs = (lead.monday?.images || []).map(apiUrl);
   const card = h('div', { class: 'card pad' }, h('div', { class: 'eyebrow', style: { marginBottom: '10px' } }, imgs.length > 1 ? `Images · ${imgs.length}` : 'Images'));
-  if (!imgs.length) { card.append(h('div', { class: 'small muted' }, 'No photos on the Monday board yet.')); return card; }
+  if (!imgs.length) { card.append(h('div', { class: 'small muted' }, 'No photos yet. Upload them under Documents.')); return card; }
   let i = 0;
   imgs.forEach(src => { const p = new Image(); p.decoding = 'async'; p.src = src; });   // warm every photo so the arrows are instant
   const img = h('img', { src: imgs[0], alt: lead.name, style: { width: '100%', height: '200px', objectFit: 'cover', display: 'block', cursor: 'zoom-in' }, onclick: () => lightbox(imgs, i, lead.name) });
@@ -1000,7 +999,7 @@ function destCard(lead) {
 // Small location map on the lead page (Austin 9/30). Pin comes from Peter's Monday Address column.
 function miniMap(lead) {
   const card = h('div', { class: 'card pad' }, h('div', { class: 'eyebrow', style: { marginBottom: '10px' } }, 'Location'));
-  if (!lead.lat || !lead.lng || typeof L === 'undefined') { card.append(h('div', { class: 'small muted' }, lead.address ? `No map pin yet for ${lead.address}` : 'No address yet. Add it on the Monday board.')); return card; }
+  if (!lead.lat || !lead.lng || typeof L === 'undefined') { card.append(h('div', { class: 'small muted' }, lead.address ? `No map pin yet for ${lead.address}` : 'No address yet. Add it with Edit lead.')); return card; }
   const el = h('div', { style: { height: '200px', borderRadius: '10px', overflow: 'hidden' } });
   card.append(el, lead.address ? h('div', { class: 'small muted', style: { marginTop: '8px' } }, h('a', { href: `https://www.google.com/maps/search/?api=1&query=${lead.lat},${lead.lng}`, target: '_blank' }, lead.address)) : null);
   setTimeout(() => {
@@ -1226,16 +1225,20 @@ function checklistTab(lead, save) {
   const answers = { ...lead.checklist };
   const wrap = h('div', {});
   const draw = () => {
-    const all = cl.sections.flatMap(s => s.items);
-    const yes = all.filter(i => answers[i.key] === 'yes').length, no = all.filter(i => answers[i.key] === 'no').length;
-    const fatal = all.filter(i => i.fatal && answers[i.key] === 'no');
-    const fixable = all.filter(i => i.fatal && answers[i.key] === 'fixable');
-    const unk = all.filter(i => i.fatal && !answers[i.key]);
+    // 11/1 Peter: two gate questions open the water section. If the site has no pool AND isn't on the ocean, the other water questions disappear and the water knock-out counts as failed.
+    const noWater = answers.has_pool === 'no' && answers.on_ocean === 'no';
+    const shown = (sec, i) => !(sec.key === 'water' && noWater && !i.gate);
+    const eff = noWater ? { ...answers, ko_water: 'no' } : answers;
+    const all = cl.sections.flatMap(s => s.items.filter(i => !i.gate && shown(s, i)).concat(noWater && s.key === 'water' ? s.items.filter(i => i.key === 'ko_water') : []));
+    const yes = all.filter(i => eff[i.key] === 'yes').length, no = all.filter(i => eff[i.key] === 'no').length;
+    const fatal = all.filter(i => i.fatal && eff[i.key] === 'no');
+    const fixable = all.filter(i => i.fatal && eff[i.key] === 'fixable');
+    const unk = all.filter(i => i.fatal && !eff[i.key]);
     const y = window.scrollY;
     const verdict = fatal.length ? 'Loser: a knock-out failed' : fixable.length ? `Conditional: ${fixable.length} knock-out(s) fixable, capped at warm` : unk.length ? `${yes} winner traits, ${unk.length} knock-outs still to verify` : (yes >= all.length * 0.7 && no <= 2 ? 'Looks like a winner' : `${yes} of ${all.length} winner traits confirmed`);
     wrap.replaceChildren(...[
       h('div', { class: 'card pad', style: { marginBottom: '16px' } }, h('h2', {}, verdict), h('div', { class: 'small muted' }, cl.intro || ''), fatal.map(i => h('div', { class: 'ko', style: { marginTop: '10px' } }, `Fatal: ${i.label}`))),
-      ...cl.sections.map(sec => h('div', { class: 'card pad', style: { marginBottom: '16px' } }, h('h3', { style: { marginBottom: '6px' } }, sec.label), sec.items.map(i => h('div', { class: 'chk-item' },
+      ...cl.sections.map(sec => h('div', { class: 'card pad', style: { marginBottom: '16px' } }, h('h3', { style: { marginBottom: '6px' } }, sec.label), sec.key === 'water' && noWater ? h('div', { class: 'ko', style: { margin: '6px 0 10px' } }, 'No pool and not on the ocean: no water, so this site fails the water knock-out. The other water questions are hidden.') : null, sec.items.filter(i => shown(sec, i)).map(i => h('div', { class: 'chk-item' },
         h('div', {}, i.label, i.fatal ? h('span', { class: 'pill bad', style: { marginLeft: '8px' } }, 'knock-out') : null),
         h('div', { class: 'tri' }, (i.fatal ? [['yes', 'Pass'], ['fixable', 'Fixable'], ['no', 'Fail'], ['unk', '?']] : [['yes', 'Yes'], ['no', 'No'], ['unk', '?']]).map(([v, l]) => h('button', { class: `${v}${(answers[i.key] || 'unk') === v ? ' on' : ''}`, onclick: async () => { if (v === 'unk' || answers[i.key] === v) delete answers[i.key]; else answers[i.key] = v; lead = await save({ checklist: answers, touch: false }, true); draw(); } }, l))),
         i.fatal && answers[i.key] === 'fixable' ? h('input', { class: 'input', style: { gridColumn: '1 / -1' }, placeholder: 'The fix the counterparty must agree to in writing (e.g. floating swim platform in the marina basin)', value: answers[`${i.key}_fix`] || '', onchange: async (e) => { answers[`${i.key}_fix`] = e.target.value; lead = await save({ checklist: answers, touch: false }, true); } }) : null,
