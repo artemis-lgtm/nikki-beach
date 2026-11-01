@@ -141,7 +141,7 @@ new MutationObserver(() => applyLock()).observe(document.body, { childList: true
 // ---------- Shell + router
 const NAV = [
   ['/', 'Overview'], ['/map', 'Map'], ['/tasks', 'Tasks - To Do'],
-  ['sep'], ['/people', 'People'], ['/brand', 'Brand library'], ['/review', 'Weekly review'], ['/playbook', 'Playbook'], ['/markets', 'Markets'],
+  ['sep'], ['/people', 'People'], ['/brand', 'Brand library'], ['/review', 'Weekly review'], ['/playbook', 'Playbook'], ['/markets', 'Markets'], ['/report', 'Monthly report'],
 ];
 function render() {
   dropMaps();
@@ -176,6 +176,7 @@ function render() {
   else if (r.startsWith('/footprint')) navigate('/map');   // 9/30: Footprint now lives under the map
   else if (r.startsWith('/review')) viewReview(main);
   else if (r.startsWith('/playbook')) viewPlaybook(main);
+  else if (r.startsWith('/report')) viewReport(main);
   else if ((m = /^\/lead\/(\d+)(?:\/(\w+))?/.exec(r))) viewLead(main, Number(m[1]), m[2] || 'overview');
   else main.append(h('div', { class: 'empty' }, 'Nothing here.'));
 }
@@ -282,6 +283,7 @@ const BUILTIN_VIEWS = [
   { id: 'all', name: 'All leads', source: 'all', builtin: true },
   { id: 'airtable', name: 'Airtable Leads', source: 'airtable', builtin: true },
   { id: 'continuity', name: 'Continuity Leads', source: 'continuity', builtin: true },
+  { id: 'declined', name: 'Declined by us', source: 'declined', builtin: true },   // 11/1 Peter: our own declines get their own list
 ];
 const allViews = () => [...BUILTIN_VIEWS, ...(state.views || [])];
 const lsGet = (k, d) => { try { return localStorage.getItem(k) ?? d; } catch { return d; } };
@@ -290,12 +292,12 @@ const isAirtableLead = (l) => !!l.airtable;
 const isContinuityLead = (l) => !l.airtable || !!l.monday;
 // "Bahia Cabana OR Selene" matches either phrase
 const matchesQ = (l, q) => { if (!q) return true; const hay = [l.name, l.ref, l.address, l.city, l.country, ...(l.monday?.columns || []).map(c => c.text), ...(l.airtable?.columns || []).map(c => c.text)].join(' ').toLowerCase(); return q.split(/\s+OR\s+/i).map(x => x.trim().toLowerCase()).filter(Boolean).some(x => hay.includes(x)); };
-const viewLeads = (v, extraQ) => state.leads.filter(l => (v.source === 'airtable' ? isAirtableLead(l) : v.source === 'continuity' ? isContinuityLead(l) : true)
+const viewLeads = (v, extraQ) => state.leads.filter(l => (v.source === 'airtable' ? isAirtableLead(l) && !l.declined_at : v.source === 'continuity' ? isContinuityLead(l) && !l.declined_at : v.source === 'declined' ? !!l.declined_at : true)
   && (!v.nb_status || l.airtable?.status === v.nb_status) && matchesQ(l, v.q) && matchesQ(l, extraQ));
 async function saveViews(list) { state.views = await api('/api/views', { method: 'PUT', body: list }); }
 function viewModal(v = null) {
   const name = h('input', { class: 'input', value: v?.name || '', placeholder: 'e.g. Peter’s Leads' });
-  const source = h('select', { class: 'input' }, [['all', 'All leads'], ['airtable', 'Airtable Leads'], ['continuity', 'Continuity Leads']].map(([k, t]) => h('option', { value: k, selected: (v?.source || 'all') === k }, t)));
+  const source = h('select', { class: 'input' }, [['all', 'All leads'], ['airtable', 'Airtable Leads'], ['continuity', 'Continuity Leads'], ['declined', 'Declined by us']].map(([k, t]) => h('option', { value: k, selected: (v?.source || 'all') === k }, t)));
   const q = h('input', { class: 'input', value: v?.q || '', placeholder: 'Words to match, e.g. Bahia Cabana OR Selene' });
   const st = h('select', { class: 'input' }, h('option', { value: '' }, 'Any'), NB_STATUS_ORDER.map(k => h('option', { value: k, selected: v?.nb_status === k }, nbTitle(k))));
   const layout = h('select', { class: 'input' }, [['grid', 'Grid'], ['gallery', 'Gallery']].map(([k, t]) => h('option', { value: k, selected: (v?.layout || 'grid') === k }, t)));
@@ -356,16 +358,72 @@ function leadPopup(l) {
     h('h2', { style: { marginTop: '16px' } }, l.name),
     h('div', { class: 'sub' }, [l.ref, leadPlace(l), l.address].filter(Boolean).join(' · ')),
     h('div', { class: 'g-pills', style: { marginBottom: '14px' } }, h('span', { class: 'pill' }, leadType(l)), statusPill(l), tempPicker(l)),
-    h('dl', { class: 'kv' }, kv('Date added', fmt.date(dateAdded(l))), kv('Summary', l.airtable ? '' : (l.summary || '')),
+    h('dl', { class: 'kv' }, kv('Date added', fmt.date(dateAdded(l))), kv('Declined by us', l.declined_at ? `${fmt.date(l.declined_at)}${l.decline_reason ? ': ' + l.decline_reason : ''}` : ''), kv('Summary', l.airtable ? '' : (l.summary || '')),
       ...at.map(c => kv(c.title, c.title === 'Initial contact made' || c.title === 'Deadline' ? fmt.date(c.text) : c.text)),
       ...md.map(c => kv(c.title, c.text))),
     h('div', { class: 'modal-foot' },
       l.airtable?.url ? h('a', { class: 'btn', href: l.airtable.url, target: '_blank', rel: 'noopener', style: { marginRight: 'auto' } }, 'Open in Airtable') : null,
       l.monday?.url ? h('a', { class: 'btn', href: l.monday.url, target: '_blank', rel: 'noopener', style: l.airtable?.url ? {} : { marginRight: 'auto' } }, 'Open in Monday') : null,
+      h('button', { class: `btn${l.declined_at ? '' : ' decline'}`, 'data-keep': '1', onclick: () => declineLead(l, () => { close(); render(); }) }, l.declined_at ? 'Undo decline' : 'Decline'),
       h('button', { class: 'btn ghost', 'data-keep': '1', onclick: close }, 'Close'),
       h('button', { class: 'btn primary', 'data-keep': '1', onclick: () => { close(); navigate(`/lead/${l.id}`); } }, 'Open full page'))));
   ov.dataset.unlocked = '1';
   document.body.append(ov);
+}
+// 11/1 Peter: decline from the list, the pop-up or the property page, and always say why (the monthly report reads it)
+function declineLead(l, after) {
+  if (l.declined_at) {
+    if (!confirm(`Bring ${l.name} back into play?`)) return;
+    api(`/api/leads/${l.id}`, { method: 'PATCH', body: { declined_at: null, decline_reason: null, touch: false } }).then(refreshLeads).then(() => { toast('Back in play'); after && after(); }).catch(err => toast(err.message, true));
+    return;
+  }
+  const why = h('textarea', { class: 'input', rows: 3, placeholder: 'e.g. too small for Nikki Beach, landlord wants a percentage lease, too far from the beach' });
+  const ov = modal(`Decline ${l.name}`, 'It moves to Declined by us, becomes a grey X on the map, and shows up in the monthly report with your reason.', h('div', { class: 'field' }, h('label', {}, 'Why are we declining it?'), why), (close) => [
+    h('button', { class: 'btn decline', 'data-keep': '1', onclick: async () => {
+      const reason = why.value.trim(); if (!reason) { why.focus(); return toast('Add a short reason so the report can show why', true); }
+      try { await api(`/api/leads/${l.id}`, { method: 'PATCH', body: { declined_at: new Date().toISOString(), decline_reason: reason, handed_off_at: null, touch: false } }); await refreshLeads(); close(); toast('Declined'); after && after(); } catch (err) { toast(err.message, true); }
+    } }, 'Decline')]);
+  ov.dataset.unlocked = '1';
+}
+// 11/1 Peter: one report per month of what we did: added, declined, handed off, with the date, address, status and why
+const leadStatusText = (l) => l.declined_at ? 'Declined by us' : l.handed_off_at ? `Handed off${l.handed_off_to ? ' to ' + l.handed_off_to : ''}` : l.airtable ? (l.airtable.status === 'DECLINED' ? 'Declined by Nikki Beach' : 'Nikki Beach: ' + nbTitle(l.airtable.status)) : stageLabel(l.stage);
+const leadWhy = (l) => l.declined_at ? (l.decline_reason || 'No reason recorded') : l.handed_off_at ? `Handed off ${fmt.date(l.handed_off_at)}` : (atText(l, 'Remarks') || atText(l, 'Next Steps') || atText(l, 'Short Intro') || l.summary || mdText(l, 'Notes') || '');
+const localYm = (d) => { const x = new Date(d); return `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, '0')}`; };
+function reportRows(ym) {
+  const inMonth = (d) => d && !isNaN(Date.parse(d)) && localYm(d) === ym;
+  const rows = [];
+  for (const l of state.leads) {
+    const addr = l.address || atText(l, 'Address') || mdText(l, 'Address') || leadPlace(l);
+    if (inMonth(dateAdded(l))) rows.push({ kind: 'Added', date: dateAdded(l), l, addr });
+    if (inMonth(l.declined_at)) rows.push({ kind: 'Declined by us', date: l.declined_at, l, addr });
+    if (inMonth(l.handed_off_at)) rows.push({ kind: 'Handed off', date: l.handed_off_at, l, addr });
+  }
+  return rows.sort((a, b) => Date.parse(a.date) - Date.parse(b.date));
+}
+function viewReport(main) {
+  const now = new Date(); const months = [];
+  for (let i = 0; i < 12; i++) { const d = new Date(now.getFullYear(), now.getMonth() - i, 1); months.push(localYm(d)); }
+  const monthName = (ym) => new Date(ym + '-15T12:00:00').toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
+  let ym = state.reportMonth || months[0];
+  const pick = h('select', { class: 'input', 'data-keep': '1', style: { width: 'auto', borderRadius: '999px' }, onchange: (e) => { ym = state.reportMonth = e.target.value; draw(); } }, months.map(m => h('option', { value: m, selected: m === ym }, monthName(m))));
+  const wrap = h('div', {});
+  const csv = () => { const rows = reportRows(ym); const q = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+    const out = [['Date', 'What happened', 'Project', 'Address', 'Status now', 'Why'].join(','), ...rows.map(r => [fmt.date(r.date), r.kind, r.l.name, r.addr, leadStatusText(r.l), leadWhy(r.l)].map(q).join(','))].join('\n');
+    const a = document.createElement('a'); a.download = `Nikki Beach activity ${ym}.csv`; a.href = URL.createObjectURL(new Blob([out], { type: 'text/csv' })); a.click(); };
+  const table = (rows) => h('table', { class: 'table report-table' }, h('thead', {}, h('tr', {}, ['Date', 'What happened', 'Project', 'Address', 'Status now', 'Why'].map(t => h('th', {}, t)))),
+    h('tbody', {}, rows.map(r => h('tr', { onclick: () => leadPopup(r.l) }, h('td', { style: { whiteSpace: 'nowrap' } }, fmt.date(r.date)), h('td', {}, h('span', { class: 'pill', style: { whiteSpace: 'nowrap' } }, r.kind)), h('td', { class: 'lead-name' }, r.l.name), h('td', { class: 'small' }, r.addr), h('td', { class: 'small' }, leadStatusText(r.l)), h('td', { class: 'small', style: { maxWidth: '380px' } }, leadWhy(r.l))))));
+  function draw() {
+    const rows = reportRows(ym); const n = (k) => rows.filter(r => r.kind === k).length;
+    wrap.replaceChildren(h('div', { class: 'card pad wide-scroll' },
+      h('div', { class: 'eyebrow' }, `Higney International · Nikki Beach business development · ${monthName(ym)}`),
+      h('h2', { style: { margin: '6px 0 4px' } }, `Activity report, ${monthName(ym)}`),
+      h('div', { class: 'small muted', style: { marginBottom: '14px' } }, `${n('Added')} added · ${n('Declined by us')} declined by us · ${n('Handed off')} handed off`),
+      rows.length ? table(rows) : h('div', { class: 'empty' }, 'Nothing happened in this month yet.')));
+  }
+  main.append(topbar('Monthly report', 'Everything we added, declined or handed off in a month, with the date, address, status and why. Print it or download it.', pick,
+    h('button', { class: 'btn', 'data-keep': '1', onclick: csv }, 'Download CSV'),
+    h('button', { class: 'btn primary', 'data-keep': '1', onclick: () => { const p = h('div', { class: 'onepager' }, wrap.firstChild.cloneNode(true)); document.body.append(p); window.print(); setTimeout(() => p.remove(), 500); } }, 'Print / PDF')), wrap);
+  draw();
 }
 function viewPipeline(main) {
   const f = state.filters;
@@ -465,9 +523,10 @@ function viewMap(main) {
   const on = state.mapLayers || (state.mapLayers = { areas: true, hot: true, warm: true, cold: true, open: true, closed: true, lucia: true, concepts: true, nb_live: true, nb_declined: true });
   if (on.areas === undefined) on.areas = true;
   if (on.nb_live === undefined) { on.nb_live = true; on.nb_declined = true; }
+  if (on.our_declined === undefined) on.our_declined = true;
   const items = [['areas', 'Search areas', { background: 'rgba(233,77,140,.25)', border: '2px dashed #e94d8c' }], ['hot', 'hot', { background: tempColor.hot }], ['warm', 'warm', { background: tempColor.warm }], ['cold', 'cold', { background: tempColor.cold }],
     ['open', 'Nikki Beach open / announced', { background: '#16151f', borderRadius: '2px' }], ['closed', 'Nikki Beach closed', { background: '#fff', border: '2px solid #16151f', borderRadius: '2px' }], ['lucia', 'Lucia', { background: '#e9a23b', borderRadius: '2px' }], ['concepts', 'Cocktail Club / Maison Mer', { background: '#2f8596', borderRadius: '2px' }],
-    ['nb_live', 'Nikki Beach reviewing', { background: '#fff', border: '3px solid #2f8596' }], ['nb_declined', 'Declined by Nikki Beach', { background: '#e5532e', borderRadius: '2px' }]];
+    ['nb_live', 'Nikki Beach reviewing', { background: '#fff', border: '3px solid #2f8596' }], ['nb_declined', 'Declined by Nikki Beach', { background: '#e5532e', borderRadius: '2px' }], ['our_declined', 'Declined by us', { background: '#7d7a8c', borderRadius: '2px' }]];
   const layers = {};
   const legend = h('div', { class: 'map-legend', style: { justifyContent: 'center' } }, items.map(([k, label, sw]) => h('button', { class: `legend-toggle${on[k] ? ' on' : ''}`, 'data-keep': '1', 'aria-pressed': String(on[k]), onclick: (e) => {
     on[k] = !on[k]; e.currentTarget.classList.toggle('on', on[k]); e.currentTarget.setAttribute('aria-pressed', String(on[k]));
@@ -501,13 +560,16 @@ function viewMap(main) {
   for (const f of state.footprint) if (f.lat && f.lng) { const k = /^Lucia\b/.test(f.name) ? 'lucia' : /Cocktail Club|Maison Mer/.test(f.name) ? 'concepts' : f.status === 'closed' ? 'closed' : 'open'; L.marker([f.lat, f.lng], { icon: icon(`fp ${k === 'open' ? '' : k}`), zIndexOffset: k === 'lucia' || k === 'concepts' ? 300 : 0 }).addTo(layers[k]).bindPopup(`<b>${escapeHtml(f.name)}</b><br>${escapeHtml(f.country || '')} · ${escapeHtml(fmt.title(f.format))} · ${escapeHtml(f.status)}${f.opened ? ` · ${f.opened}${f.closed ? `–${f.closed}` : ''}` : ''}${f.outcome ? `<br><span style="color:#6a6a6a">${escapeHtml(f.outcome)}</span>` : ''}`) }
 
   // 10/14 Austin: every Nikki Beach Airtable project gets a pin, declined ones included, so a site we like can be checked against what they already turned down
-  for (const l of state.leads) if (l.lat && l.lng && l.airtable && !l.monday) {
+  // 11/1 Peter: what we declined ourselves gets a grey X of its own and leaves the other layers
+  for (const l of state.leads) if (l.lat && l.lng && l.declined_at) L.marker([l.lat, l.lng], { icon: icon('ourx'), zIndexOffset: 50 }).addTo(layers.our_declined)
+    .bindPopup(`<b>${escapeHtml(l.name)}</b><br><span style="color:#5d5a6b;font-weight:600">Declined by us ${escapeHtml(fmt.date(l.declined_at))}</span>${l.decline_reason ? `<br><i>${escapeHtml(l.decline_reason)}</i>` : ''}<br><a href="#/lead/${l.id}">Open lead</a>`);
+  for (const l of state.leads) if (l.lat && l.lng && l.airtable && !l.monday && !l.declined_at) {
     const dead = NB_RED.has(l.airtable.status); const approx = l.geo_precision === 'city';
     const col = Object.fromEntries(l.airtable.columns.map(c => [c.title, c.text]));
     L.marker([l.lat, l.lng], { icon: icon(`${dead ? 'nbx' : 'nblive'}${approx ? ' approx' : ''}`), zIndexOffset: dead ? 100 : 400 }).addTo(layers[dead ? 'nb_declined' : 'nb_live'])
       .bindPopup(`<b>${escapeHtml(l.name)}</b><br><span style="color:${dead ? '#c2401f' : '#2f8596'};font-weight:600">${escapeHtml(l.airtable.status === 'DECLINED' ? 'Declined by Nikki Beach' : nbTitle(l.airtable.status))}</span>${col['Initial contact made'] ? ` · first contact ${escapeHtml(fmt.date(col['Initial contact made']))}` : ''}<br>${escapeHtml([col.City, col.Country].filter(Boolean).join(', '))}${col.Remarks ? `<br><i>${escapeHtml(col.Remarks.slice(0, 160))}</i>` : ''}${approx ? '<br><span class="small muted">Pin is the city, not the exact site</span>' : ''}${destPopupHtml(destFor(l))}<br><a href="#/lead/${l.id}">Open lead</a>`);
   }
-  for (const l of state.leads) if (l.lat && l.lng && l.status === 'active' && layers[l.temperature] && !(l.airtable && !l.monday)) L.marker([l.lat, l.lng], { icon: icon(l.temperature), zIndexOffset: 500 }).addTo(layers[l.temperature]).bindPopup(`<b>${escapeHtml(l.name)}</b><br>${escapeHtml(l.address || l.country || '')}${destPopupHtml(destFor(l))}<br><a href="#/lead/${l.id}">Open lead →</a>`);
+  for (const l of state.leads) if (l.lat && l.lng && l.status === 'active' && !l.declined_at && layers[l.temperature] && !(l.airtable && !l.monday)) L.marker([l.lat, l.lng], { icon: icon(l.temperature), zIndexOffset: 500 }).addTo(layers[l.temperature]).bindPopup(`<b>${escapeHtml(l.name)}</b><br>${escapeHtml(l.address || l.country || '')}${destPopupHtml(destFor(l))}<br><a href="#/lead/${l.id}">Open lead →</a>`);
   for (const [k] of items) if (on[k]) layers[k].addTo(map);
   setTimeout(() => map.invalidateSize(), 50);
 
@@ -975,10 +1037,7 @@ async function viewLead(main, id, tab) {
           } }, 'Done')]);
         who.addEventListener('keydown', (e) => { if (e.key === 'Enter') who.closest('.modal').querySelector('.btn.primary').click(); });
       } }, lead.handed_off_at ? 'Undo handoff' : 'Handoff'),
-      h('button', { class: `btn sm${lead.declined_at ? '' : ' decline'}`, 'data-keep': '1', title: lead.declined_at ? 'Bring this property back into play' : 'Pass on this property; it moves to Declined', onclick: async () => {
-        if (!lead.declined_at && !confirm(`Decline ${lead.name}? It moves to Declined at the bottom of the Overview and the page greys out.`)) return;
-        await save({ declined_at: lead.declined_at ? null : new Date().toISOString(), handed_off_at: null, touch: false }, true); render();
-      } }, lead.declined_at ? 'Undo decline' : 'Decline')),
+      h('button', { class: `btn sm${lead.declined_at ? '' : ' decline'}`, 'data-keep': '1', title: lead.declined_at ? 'Bring this property back into play' : 'Pass on this property; it moves to Declined by us', onclick: () => declineLead(lead, () => render()) }, lead.declined_at ? 'Undo decline' : 'Decline')),
   ), h('div', { class: 'btn-row' },
     h('select', { class: 'input', style: { width: 'auto', borderRadius: '999px' }, onchange: (e) => moveStage(lead, e.target.value) }, state.config.stages.map(s => h('option', { value: s.key, selected: s.key === lead.stage }, s.label))),
     h('button', { class: 'btn ghost', onclick: () => statusModal(lead, save) }, lead.status === 'active' ? 'Park / lose / win' : 'Reactivate'),
@@ -994,7 +1053,7 @@ async function viewLead(main, id, tab) {
   }
   if (NB_RED.has(lead.airtable?.status)) setTimeout(() => main.querySelector('.detail-head')?.after(h('div', { class: 'handoff-banner declined' }, `${lead.airtable.status === 'DECLINED' ? 'Declined by Nikki Beach' : nbTitle(lead.airtable.status)} in their own Airtable CRM. Check with Peter before spending time here.`)), 0);
   if (lead.handed_off_at) setTimeout(() => { main.classList.add('handed-off'); main.querySelector('.detail-head')?.after(h('div', { class: 'handoff-banner' }, `Handed off to ${lead.handed_off_to || 'Nikki Beach'} on ${fmt.date(lead.handed_off_at)}.`)); }, 0);
-  else if (lead.declined_at) setTimeout(() => { main.classList.add('handed-off'); main.querySelector('.detail-head')?.after(h('div', { class: 'handoff-banner declined' }, `Declined on ${fmt.date(lead.declined_at)}. This property was passed on and is no longer being pursued.`)); }, 0);
+  else if (lead.declined_at) setTimeout(() => { main.classList.add('handed-off'); main.querySelector('.detail-head')?.after(h('div', { class: 'handoff-banner declined' }, `Declined on ${fmt.date(lead.declined_at)}.${lead.decline_reason ? ' Why: ' + lead.decline_reason : ' This property was passed on and is no longer being pursued.'}`)); }, 0);
   const body = h('div', {});
   const gateBox = h('div', { class: 'card pad' }, h('div', { class: 'eyebrow', style: { marginBottom: '10px' } }, 'Gate to leave this stage'),
     h('label', { class: 'gate-row' }, h('input', { type: 'checkbox', checked: !!lead.gates[lead.stage], onchange: (e) => save({ gates: { ...lead.gates, [lead.stage]: e.target.checked }, touch: false }) }), h('span', {}, st?.gate || '')),

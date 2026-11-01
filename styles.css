@@ -471,3 +471,9 @@ select.temp-pick option { color: #111; background: #fff; text-transform: upperca
 .swatches { display: flex; gap: 6px; margin-bottom: 4px; }
 .swatch { width: 22px; height: 22px; border-radius: 50%; border: 2px solid #fff; box-shadow: 0 0 0 1px var(--border-strong); cursor: pointer; padding: 0; }
 .swatch.on { box-shadow: 0 0 0 2px var(--ink); }
+/* 11/1 Peter: our own declines on the map, grey X */
+.marker.ourx { width: 16px; height: 16px; border-radius: 3px; background: #7d7a8c; border: 2px solid #fff; position: relative; }
+.marker.ourx::before, .marker.ourx::after { content: ''; position: absolute; left: 50%; top: 50%; width: 10px; height: 2px; background: #fff; transform: translate(-50%, -50%) rotate(45deg); }
+.marker.ourx::after { transform: translate(-50%, -50%) rotate(-45deg); }
+.report-table td { vertical-align: top; }
+@media print { .onepager .report-table { font-size: 10.5px; } .onepager .card { border: 0; box-shadow: none; } }
