@@ -359,7 +359,8 @@ function leadPopup(l) {
   const close = () => ov.remove();
   const ov = h('div', { class: 'overlay', onclick: (e) => { if (e.target === ov) close(); } }, h('div', { class: 'modal rec-pop' },
     h('button', { class: 'rec-x', 'aria-label': 'Close', 'data-keep': '1', onclick: close }, '×'),
-    h('div', { onclick: () => imgs.length && lightbox(imgs.map(apiUrl), 0, l.name), style: { cursor: imgs.length ? 'zoom-in' : '' } }, headerImage(l, 'rec-head')),
+    l.lat && l.lng ? liveAreaMap({ lat: l.lat, lng: l.lng, radius_m: 1609, color: '#2f8596', pin: true }, 'rec-head rec-map') : h('div', { onclick: () => imgs.length && lightbox(imgs.map(apiUrl), 0, l.name), style: { cursor: imgs.length ? 'zoom-in' : '' } }, headerImage(l, 'rec-head')),
+    l.lat && l.lng && imgs.length ? h('div', { style: { marginTop: '8px' } }, h('button', { class: 'btn sm', 'data-keep': '1', onclick: () => lightbox(imgs.map(apiUrl), 0, l.name) }, `Photos (${imgs.length})`)) : null,
     h('h2', { style: { marginTop: '16px' } }, l.name),
     h('div', { class: 'sub' }, [l.ref, leadPlace(l), l.address].filter(Boolean).join(' · ')),
     h('div', { class: 'g-pills', style: { marginBottom: '14px' } }, h('span', { class: 'pill' }, leadType(l)), statusPill(l), tempPicker(l)),
@@ -459,7 +460,7 @@ function viewReport(main) {
 // 11/1 Peter: Discovery Areas as a gallery. Each card's picture is a satellite snapshot of the area with its outline drawn on it.
 function areaCard(a) {
   const el = h('div', { class: 'g-head area-shot' });
-  const card = h('div', { class: 'g-card', tabindex: '0', onclick: () => { state.mapFocus = areaPts(a); navigate('/map'); } }, el,
+  const card = h('div', { class: 'g-card', tabindex: '0', onclick: () => areaDetail(a, () => render()) }, el,
     h('div', { class: 'g-body' }, h('div', { class: 'g-title' }, h('span', { style: { display: 'inline-block', width: '10px', height: '10px', borderRadius: '50%', background: a.color || '#e94d8c', marginRight: '8px' } }), a.name || 'New Discovery Area'),
       h('div', { class: 'g-place' }, [a.assigned_to ? 'Looking: ' + a.assigned_to : '', fmt.date(a.created_at)].filter(Boolean).join(' · ')),
       a.notes ? h('div', { class: 'g-intro' }, a.notes) : null));
@@ -476,6 +477,89 @@ function areaCard(a) {
   return card;
 }
 const areaPts = (a) => { try { const sh = a.shape_json ? JSON.parse(a.shape_json) : null; if (sh?.points?.length) return sh.points; } catch {} return [[a.lat, a.lng]]; };
+// 11/1 Peter: a real map in the pop-ups (drag, zoom, Map or Satellite), not a picture. Properties get a 1-mile ring.
+function liveAreaMap(a, cls) {
+  const el = h('div', { class: cls, 'data-keep': '1' });
+  if (typeof L === 'undefined') return el;
+  setTimeout(() => {
+    const m = L.map(el, { zoomControl: true, attributionControl: false, scrollWheelZoom: false });
+    const street = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 });
+    const sat = L.layerGroup([L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', { maxZoom: 19 }), L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}', { maxZoom: 19 })]);
+    (lsGet('nb_map_base', 'map') === 'satellite' ? sat : street).addTo(m);
+    L.control.layers({ Map: street, Satellite: sat }, null, { position: 'topright' }).addTo(m);
+    const col = a.color || '#e94d8c', style = { color: col, weight: 2.5, fillColor: col, fillOpacity: a.pin ? 0.08 : 0.22, dashArray: a.pin ? '6 6' : null, interactive: false };
+    let sh = null; try { sh = a.shape_json ? JSON.parse(a.shape_json) : null; } catch {}
+    const poly = sh?.points?.length >= 3;
+    (poly ? L.polygon(sh.points, style) : L.circle([a.lat, a.lng], { radius: a.radius_m || 2000, ...style })).addTo(m);
+    if (a.pin) L.circleMarker([a.lat, a.lng], { radius: 7, color: '#fff', weight: 2, fillColor: col, fillOpacity: 1, interactive: false }).addTo(m);
+    m.fitBounds(poly ? L.polygon(sh.points).getBounds() : L.latLng(a.lat, a.lng).toBounds((a.radius_m || 2000) * 2), { padding: [12, 12] });
+    liveMaps.add(m);
+  }, 30);
+  return el;
+}
+// 11/1 Peter: a Discovery Area opens as its own pop-up: live map, notes, tasks, contacts, and Convert to lead
+function areaDetail(a, after) {
+  $('.overlay')?.remove();
+  let tasks = []; try { tasks = JSON.parse(a.tasks_json || '[]'); } catch {}
+  let cids = []; try { cids = JSON.parse(a.contact_ids_json || '[]'); } catch {}
+  const patch = async (body) => { const r = await api(`/api/areas/${a.id}`, { method: 'PATCH', body }); Object.assign(a, r); const i = (state.areas || []).findIndex(x => x.id === a.id); if (i >= 0) state.areas[i] = a; return r; };
+  const notes = h('textarea', { class: 'input', 'data-keep': '1', rows: 4, placeholder: 'Notes: what to look for, who said what' }, a.notes || '');
+  const who = h('input', { class: 'input', 'data-keep': '1', value: a.assigned_to || '', placeholder: 'Who is looking' });
+  const name = h('input', { class: 'input', 'data-keep': '1', value: a.name || '', placeholder: 'Name of the area' });
+  const taskBox = h('div', {}), contactBox = h('div', {});
+  const drawTasks = () => {
+    const t = h('input', { class: 'input', 'data-keep': '1', placeholder: 'Add a task', style: { flex: 1 } });
+    const due = h('input', { class: 'input', 'data-keep': '1', type: 'date', style: { width: 'auto' } });
+    const add = async () => { if (!t.value.trim()) return; tasks.push({ text: t.value.trim(), due: due.value || '', done: false, by: (state.user?.name || state.user || ''), at: today() }); await patch({ tasks }); drawTasks(); };
+    t.addEventListener('keydown', (e) => { if (e.key === 'Enter') add(); });
+    taskBox.replaceChildren(h('div', { class: 'eyebrow', style: { margin: '14px 0 6px' } }, `Tasks · ${tasks.filter(x => !x.done).length} open`),
+      ...tasks.map((x, i) => h('div', { class: 'row', style: { gap: '8px', alignItems: 'center', margin: '4px 0' } },
+        h('input', { type: 'checkbox', 'data-keep': '1', checked: x.done, onchange: async (e) => { tasks[i].done = e.target.checked; await patch({ tasks }); drawTasks(); } }),
+        h('span', { style: { flex: 1, textDecoration: x.done ? 'line-through' : '', color: x.done ? 'var(--muted)' : '' } }, x.text, x.due ? h('span', { class: 'small muted' }, ` · due ${fmt.date(x.due)}`) : null),
+        h('button', { class: 'btn sm ghost danger', 'data-keep': '1', onclick: async () => { tasks.splice(i, 1); await patch({ tasks }); drawTasks(); } }, 'Remove'))),
+      h('div', { class: 'row', style: { gap: '6px', marginTop: '6px' } }, t, due, h('button', { class: 'btn sm', 'data-keep': '1', onclick: add }, 'Add')));
+  };
+  const drawContacts = () => {
+    const pick = h('input', { class: 'input', 'data-keep': '1', list: `ac-${a.id}`, placeholder: 'Type a name: pick someone or add a new person', style: { flex: 1 } });
+    const dl = h('datalist', { id: `ac-${a.id}` }, (state.contacts || []).map(c => h('option', { value: c.org_name ? `${c.name} (${c.org_name})` : c.name })));
+    const add = async () => {
+      const v = pick.value.trim(); if (!v) return;
+      let c = (state.contacts || []).find(c => (c.org_name ? `${c.name} (${c.org_name})` : c.name) === v || c.name === v);
+      if (!c) { c = await api('/api/contacts', { method: 'POST', body: { name: v } }); state.contacts = await api('/api/contacts'); }
+      if (!cids.includes(c.id)) cids.push(c.id); await patch({ contact_ids: cids }); drawContacts(); };
+    pick.addEventListener('keydown', (e) => { if (e.key === 'Enter') add(); });
+    const people = cids.map(id => (state.contacts || []).find(c => c.id === id)).filter(Boolean);
+    contactBox.replaceChildren(h('div', { class: 'eyebrow', style: { margin: '14px 0 6px' } }, `Contacts · ${people.length}`),
+      ...people.map(c => h('div', { class: 'row', style: { gap: '8px', alignItems: 'center', margin: '4px 0' } }, h('span', { style: { flex: 1 } }, h('b', {}, c.name), [c.title, c.org_name, c.phone, c.email].filter(Boolean).length ? h('span', { class: 'small muted' }, ' · ' + [c.title, c.org_name, c.phone, c.email].filter(Boolean).join(' · ')) : null),
+        h('button', { class: 'btn sm ghost danger', 'data-keep': '1', onclick: async () => { cids = cids.filter(x => x !== c.id); await patch({ contact_ids: cids }); drawContacts(); } }, 'Remove'))),
+      h('div', { class: 'row', style: { gap: '6px', marginTop: '6px' } }, pick, dl, h('button', { class: 'btn sm', 'data-keep': '1', onclick: add }, 'Add')));
+  };
+  drawTasks(); drawContacts();
+  const lead = a.lead_id ? state.leads.find(l => l.id === a.lead_id) : null;
+  const close = () => { ov.remove(); after && after(); };
+  const convert = async () => {
+    if (!confirm(`Convert ${a.name || 'this Discovery Area'} into a lead? The area stays on the map and links to the new lead.`)) return;
+    try {
+      await patch({ name: name.value.trim() || a.name, notes: notes.value, assigned_to: who.value.trim() || null });
+      const l = await api('/api/leads', { method: 'POST', body: { name: a.name || 'New site', lat: a.lat, lng: a.lng, summary: a.notes || '', checklist: { tasks: tasks.filter(t => !t.done).map(t => ({ ...t, priority: 'normal' })) } } });
+      for (const id of cids) await api(`/api/leads/${l.id}/contacts`, { method: 'POST', body: { contact_id: id } }).catch(() => {});
+      await patch({ lead_id: l.id, color: '#2e9e5b' }); await refreshLeads(); ov.remove(); toast(`Lead ${l.ref} created`); navigate(`/lead/${l.id}`);
+    } catch (err) { toast(err.message, true); }
+  };
+  const ov = h('div', { class: 'overlay', 'data-unlocked': '1', onclick: (e) => { if (e.target === ov) close(); } }, h('div', { class: 'modal rec-pop' },
+    h('button', { class: 'rec-x', 'aria-label': 'Close', 'data-keep': '1', onclick: close }, '×'),
+    liveAreaMap(a, 'rec-head rec-map'),
+    h('div', { class: 'field', style: { marginTop: '14px' } }, h('label', {}, 'Discovery Area'), name),
+    h('div', { class: 'field' }, h('label', {}, 'Who is looking'), who),
+    h('div', { class: 'field' }, h('label', {}, 'Notes'), notes),
+    lead ? h('div', { class: 'small', style: { margin: '6px 0' } }, 'Converted to lead ', h('a', { href: `#/lead/${lead.id}`, onclick: () => ov.remove() }, `${lead.ref} ${lead.name}`)) : null,
+    taskBox, contactBox,
+    h('div', { class: 'modal-foot' },
+      h('button', { class: 'btn', 'data-keep': '1', style: { marginRight: 'auto' }, onclick: () => { ov.remove(); state.mapFocus = areaPts(a); navigate('/map'); } }, 'Open on map'),
+      lead ? null : h('button', { class: 'btn', 'data-keep': '1', onclick: convert }, 'Convert to lead'),
+      h('button', { class: 'btn primary', 'data-keep': '1', onclick: async () => { try { await patch({ name: name.value.trim() || a.name, notes: notes.value, assigned_to: who.value.trim() || null }); toast('Saved'); close(); } catch (err) { toast(err.message, true); } } }, 'Save'))));
+  document.body.append(ov);
+}
 function viewPipeline(main) {
   const f = state.filters;
   if (!state.viewId) state.viewId = lsGet('nb_view', 'all');
@@ -510,7 +594,7 @@ function viewPipeline(main) {
       if (layout === 'gallery' && areas.length) { wrap.replaceChildren(h('div', { class: 'gallery' }, areas.map(areaCard))); return; }
       wrap.replaceChildren(areas.length ? h('div', { class: 'card wide-scroll' }, h('table', { class: 'table' },
         h('thead', {}, h('tr', {}, ['Discovery Area', 'Who is looking', 'What to look for', 'Added'].map(t => h('th', {}, t)))),
-        h('tbody', {}, areas.map(a => h('tr', { onclick: () => { state.mapFocus = [[a.lat, a.lng]]; navigate('/map'); } },
+        h('tbody', {}, areas.map(a => h('tr', { onclick: () => areaDetail(a, draw) },
           h('td', {}, h('div', { class: 'lead-name' }, h('span', { style: { display: 'inline-block', width: '10px', height: '10px', borderRadius: '50%', background: a.color || '#e94d8c', marginRight: '8px' } }), a.name || 'New Discovery Area')),
           h('td', { class: 'small' }, a.assigned_to || ''), h('td', { class: 'small', style: { maxWidth: '420px' } }, a.notes || ''), h('td', { class: 'small', style: { whiteSpace: 'nowrap' } }, fmt.date(a.created_at))))))) : h('div', { class: 'empty' }, h('h3', {}, 'No Discovery Areas yet'), 'Draw one on the Map page with + Circle, + Box or + Draw shape.'));
       return;

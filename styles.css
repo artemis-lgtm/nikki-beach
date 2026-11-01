@@ -491,3 +491,4 @@ select.temp-pick option { color: #111; background: #fff; text-transform: upperca
 .wl-count { white-space: nowrap; }
 .wl-big { font-size: 34px; font-weight: 600; color: var(--ink); }
 @media (max-width: 700px) { .wl-row { grid-template-columns: 1fr; gap: 4px; } }
+.rec-map { height: 280px; } .rec-map.leaflet-container { border-radius: var(--r-md); }
