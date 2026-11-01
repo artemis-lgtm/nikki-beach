@@ -1127,6 +1127,29 @@ function destPopupHtml(d) {
     d.hnw_reason && `<i>${escapeHtml(d.hnw_reason)}</i>`];
   return `<div style="margin-top:8px;padding-top:8px;border-top:1px solid #e5e5e5;font-size:12px;line-height:1.45">${rows.filter(Boolean).join('<br>')}</div>`;
 }
+// 11/1 Peter: a People box on the right of the property page. Pick someone already in People or type a new name.
+function peopleCard(lead, reload) {
+  const label = (c) => c.org_name ? `${c.name} (${c.org_name})` : c.name;
+  const pick = h('input', { class: 'input', 'data-keep': '1', list: `pc-${lead.id}`, placeholder: 'Add a person: type a name', style: { flex: 1, minWidth: '120px' } });
+  const add = async () => {
+    const v = pick.value.trim(); if (!v) return;
+    try {
+      let c = (state.contacts || []).find(c => label(c) === v || c.name === v);
+      if (!c) { c = await api('/api/contacts', { method: 'POST', body: { name: v } }); state.contacts = await api('/api/contacts'); }
+      await api(`/api/leads/${lead.id}/contacts`, { method: 'POST', body: { contact_id: c.id } }); toast('Added'); reload();
+    } catch (err) { toast(err.message, true); }
+  };
+  pick.addEventListener('keydown', (e) => { if (e.key === 'Enter') add(); });
+  const card = h('div', { class: 'card pad' }, h('div', { class: 'eyebrow', style: { marginBottom: '10px' } }, lead.contacts.length + lead.orgs.length ? `People · ${lead.contacts.length + lead.orgs.length}` : 'People'));
+  for (const c of lead.contacts) card.append(h('div', { class: 'doc-row' },
+    h('div', { class: 'doc-name' }, h('div', { class: 'lead-name' }, c.name), h('div', { class: 'small muted' }, [c.title, c.org_name].filter(Boolean).join(' · ')),
+      h('div', { class: 'small' }, c.phone ? h('a', { href: `tel:${c.phone}` }, c.phone) : null, c.phone && c.email ? ' · ' : '', c.email ? h('a', { href: `mailto:${c.email}` }, c.email) : null)),
+    h('button', { class: 'btn sm ghost danger', 'data-keep': '1', title: 'Remove from this property', onclick: async () => { if (!confirm(`Remove ${c.name} from this property? They stay in People.`)) return; await api(`/api/leads/${lead.id}/contacts/${c.id}`, { method: 'DELETE' }); reload(); } }, 'Remove')));
+  for (const o of lead.orgs) card.append(h('div', { class: 'doc-row' }, h('div', { class: 'doc-name' }, h('div', { class: 'lead-name' }, o.name), h('div', { class: 'small muted' }, [fmt.title(o.role), o.kind ? fmt.title(o.kind) : ''].filter(Boolean).join(' · ')))));
+  if (!lead.contacts.length && !lead.orgs.length) card.append(h('div', { class: 'small muted' }, 'Nobody linked yet.'));
+  card.append(h('div', { class: 'row', style: { gap: '6px', marginTop: '10px' } }, pick, h('datalist', { id: `pc-${lead.id}` }, (state.contacts || []).map(c => h('option', { value: label(c) }))), h('button', { class: 'btn sm', 'data-keep': '1', onclick: add }, 'Add')));
+  return card;
+}
 function destCard(lead) {
   const d = destFor(lead);
   const card = h('div', { class: 'card pad' }, h('div', { class: 'eyebrow', style: { marginBottom: '10px' } }, 'Destination'));
@@ -1190,7 +1213,7 @@ async function viewLead(main, id, tab) {
     h('select', { class: 'input', style: { width: 'auto', borderRadius: '999px' }, onchange: (e) => moveStage(lead, e.target.value) }, state.config.stages.map(s => h('option', { value: s.key, selected: s.key === lead.stage }, s.label))),
     h('button', { class: 'btn ghost', onclick: () => statusModal(lead, save) }, lead.status === 'active' ? 'Park / lose / win' : 'Reactivate'),
   ));
-  const tabs = [['overview', 'Overview'], ['score', 'Scorecard'], ['checklist', 'Winner / loser'], ['sitepack', 'Site pack'], ['people', `People (${lead.contacts.length + lead.orgs.length})`], ['activity', `To do & activity (${((lead.checklist || {}).tasks || []).filter(t => !t.done).length} open)`], ['documents', `Documents (${lead.documents.length})`], ['terms', 'Terms']];
+  const tabs = [['overview', 'Overview'], ['score', 'Scorecard'], ['checklist', 'Winner / loser'], ['sitepack', 'Site pack'], ['people', `People (${lead.contacts.length + lead.orgs.length})`], ['activity', `To do & activity (${((lead.checklist || {}).tasks || []).filter(t => !t.done).length} open)`], ['documents', `Documents (${lead.documents.length})`], ['terms', 'Terms'], ['destination', 'About Destination']];   // 11/1 Peter: destination moved out of the side column into its own tab, last
   const tabsEl = h('div', { class: 'tabs' }, tabs.map(([k, l]) => h('button', { class: k === tab ? 'active' : '', onclick: () => navigate(`/lead/${id}/${k}`) }, l)));
   // 10/14 Austin: a site we found ourselves gets checked against Nikki Beach's own pipeline (exact/address/site pins within 400 m)
   if (!lead.airtable && lead.lat && lead.lng) {
@@ -1210,7 +1233,7 @@ async function viewLead(main, id, tab) {
     // 11/1 Peter: the Airtable box on the property page is gone; the pop-up still shows their fields
     photoCard(lead),
     miniMap(lead),
-    destCard(lead),
+    peopleCard(lead, reload),   // 11/1 Peter: people on the right-hand side
     docsCard(lead, reload),
     gateBox,
     h('div', { class: 'card pad' }, h('div', { class: 'eyebrow', style: { marginBottom: '10px' } }, 'Score'),
@@ -1234,6 +1257,7 @@ async function viewLead(main, id, tab) {
   else if (tab === 'activity') body.append(activityTab(lead, reload, save));
   else if (tab === 'documents') body.append(documentsTab(lead, reload));
   else if (tab === 'terms') body.append(termsTab(lead, save));
+  else if (tab === 'destination') body.append(destCard(lead) || h('div', { class: 'card pad small muted' }, 'No destination profile for this location yet.'));
 }
 const REG_EVENTS = [['acknowledged', 'Penrod acknowledged'], ['disputed', 'Disputed by Penrod'], ['renewed', 'Renewed (+12 months on evidence of activity)'], ['converted', 'Converted (agreement signed)'], ['commission', 'Commission event (closing fee / trailing)'], ['released', 'Released'], ['expired', 'Expired'], ['note', 'Note']];
 function registrationTab(lead, reload) {
