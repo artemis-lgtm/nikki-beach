@@ -1187,9 +1187,24 @@ function peopleCard(lead, reload) {
   const add = async () => {
     const v = pick.value.trim(); if (!v) return;
     try {
-      let c = (state.contacts || []).find(c => label(c) === v || c.name === v);
-      if (!c) { c = await api('/api/contacts', { method: 'POST', body: { name: v } }); state.contacts = await api('/api/contacts'); }
-      await api(`/api/leads/${lead.id}/contacts`, { method: 'POST', body: { contact_id: c.id } }); toast('Added'); reload();
+      if (!state.contacts) state.contacts = await api('/api/contacts');
+      const c = state.contacts.find(c => label(c).toLowerCase() === v.toLowerCase() || c.name.toLowerCase() === v.toLowerCase());
+      if (c) { await api(`/api/leads/${lead.id}/contacts`, { method: 'POST', body: { contact_id: c.id } }); toast('Added'); reload(); return; }
+      // 11/16 Peter: someone new gets a short form so their email and phone come in with them (then Email works from the pop-up)
+      const f = (ph, val = '', type = 'text') => h('input', { class: 'input', type, placeholder: ph, value: val, 'data-keep': '1' });
+      const nm = f('Full name', v), em = f('Email', '', 'email'), ph = f('Phone', '', 'tel'), ti = f('Position / company');
+      const fld = (lbl, el) => h('div', { class: 'field' }, h('label', {}, lbl), el);
+      modal(`New person for ${lead.name}`, 'They are added to People and linked to this property.', h('div', {}, fld('Name', nm), fld('Email', em), fld('Phone', ph), fld('Position / company', ti)), (close) => [
+        h('button', { class: 'btn primary', 'data-keep': '1', onclick: async () => {
+          const name = nm.value.trim(); if (!name) { nm.focus(); return toast('Add a name', true); }
+          try {
+            const nc = await api('/api/contacts', { method: 'POST', body: { name, email: em.value.trim() || null, phone: ph.value.trim() || null, title: ti.value.trim() || null } });
+            await api(`/api/leads/${lead.id}/contacts`, { method: 'POST', body: { contact_id: nc.id } });
+            state.contacts = await api('/api/contacts'); close(); toast('Added'); reload();
+          } catch (err) { toast(err.message, true); }
+        } }, 'Add person')]);
+      setTimeout(() => em.focus(), 50);
+      return;
     } catch (err) { toast(err.message, true); }
   };
   pick.addEventListener('keydown', (e) => { if (e.key === 'Enter') add(); });
