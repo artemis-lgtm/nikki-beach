@@ -377,6 +377,28 @@ function editableTitle(tag, l, attrs = {}, onSaved) {
   return el;
 }
 
+// 11/16 Peter: every email link opens a Gmail compose window straight away (not the Mac Mail app)
+const gmailHref = (email) => `https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(email)}`;
+document.addEventListener('click', (e) => {
+  const a = e.target.closest && e.target.closest('a[href^="mailto:"]'); if (!a) return;
+  e.preventDefault(); e.stopPropagation();
+  window.open(gmailHref(decodeURIComponent(a.getAttribute('href').slice(7).split('?')[0])), '_blank', 'noopener');
+}, true);
+// People on the property, shown in the pop-up with one-click email (Gmail) and call links
+function popupPeople(l) {
+  const box = h('div', { class: 'pop-people' });
+  api(`/api/leads/${l.id}`).then(full => {
+    const cs = (full.contacts || []);
+    if (!cs.length) return;
+    box.replaceChildren(h('div', { class: 'eyebrow', style: { margin: '14px 0 6px' } }, `People (${cs.length})`),
+      h('div', { class: 'pop-people-list' }, cs.map(c => h('div', { class: 'pop-person' },
+        h('div', {}, h('div', { class: 'lead-name' }, c.name), h('div', { class: 'small muted' }, [c.title, c.org_name].filter(Boolean).join(' · '))),
+        h('div', { class: 'pop-person-acts' },
+          c.email ? h('a', { class: 'btn sm', href: gmailHref(c.email), target: '_blank', rel: 'noopener', title: c.email, 'data-keep': '1' }, 'Email') : null,
+          c.phone ? h('a', { class: 'btn sm ghost', href: `tel:${c.phone}`, title: c.phone, 'data-keep': '1' }, 'Call') : null)))));
+  }).catch(() => {});
+  return box;
+}
 function leadPopup(l) {
   $('.overlay')?.remove();
   const kv = (t, v) => v ? [h('dt', {}, t), h('dd', { class: 'small', style: { whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', minWidth: 0 } }, v)] : [];
@@ -394,6 +416,7 @@ function leadPopup(l) {
     h('dl', { class: 'kv' }, kv('Date added', fmt.date(dateAdded(l))), kv('Declined by us', l.declined_at ? `${fmt.date(l.declined_at)}${l.decline_reason ? ': ' + l.decline_reason : ''}` : ''), kv('Summary', l.airtable ? '' : (l.summary || '')),
       ...at.map(c => kv(c.title, c.title === 'Initial contact made' || c.title === 'Deadline' ? fmt.date(c.text) : c.text)),
       ...md.map(c => kv(c.title, c.text))),
+    popupPeople(l),
     h('div', { class: 'modal-foot' },
       l.airtable?.url ? h('a', { class: 'btn', href: l.airtable.url, target: '_blank', rel: 'noopener', style: { marginRight: 'auto' } }, 'Open in Airtable') : null,
       h('button', { class: `btn${l.declined_at ? '' : ' decline'}`, 'data-keep': '1', onclick: () => declineLead(l, () => { close(); render(); }) }, l.declined_at ? 'Undo decline' : 'Decline'),
@@ -608,8 +631,11 @@ function viewPipeline(main) {
     layoutBtns.replaceChildren(...[['grid', 'Grid'], ['gallery', 'Gallery']].map(([k, t]) => h('button', { class: `btn sm${layout === k ? ' on' : ''}`, 'data-keep': '1', onclick: () => { layout = k; lsSet(`nb_layout_${v.id}`, k); drawPanel(); draw(); } }, t)));
   };
   const title = h('h1', {});
-  main.append(h('div', { class: 'ov-layout' }, panel, h('div', { class: 'ov-main' },
-    h('div', { class: 'topbar' }, h('div', {}, title, h('div', { class: 'sub' }, 'Pick a view on the left. Click any property to open it.')), h('div', { class: 'btn-row' }, h('a', { class: 'btn', href: '/api/export/pipeline.csv' }, 'Export CSV'), h('button', { class: 'btn primary', 'data-keep': '1', onclick: () => newLeadModal() }, '+ New lead'))),
+  // 11/16 Peter: one left column, not two. On a desktop the views list lives in the main menu, right under Overview.
+  const navOverview = window.matchMedia('(min-width: 901px)').matches ? $('.rail .nav a[href="#/"]') : null;
+  if (navOverview) { panel.classList.add('views-in-rail'); navOverview.after(panel); }
+  main.append(h('div', { class: `ov-layout${navOverview ? ' one-col' : ''}` }, navOverview ? null : panel, h('div', { class: 'ov-main' },
+    h('div', { class: 'topbar' }, h('div', {}, title, h('div', { class: 'sub' }, 'Pick a view under Overview on the left. Click any property to open it.')), h('div', { class: 'btn-row' }, h('a', { class: 'btn', href: '/api/export/pipeline.csv' }, 'Export CSV'), h('button', { class: 'btn primary', 'data-keep': '1', onclick: () => newLeadModal() }, '+ New lead'))),
     h('div', { class: 'filters', style: { display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' } }, search, layoutBtns), wrap)));
   drawPanel();
   function draw() {

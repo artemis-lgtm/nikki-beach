@@ -498,3 +498,18 @@ select.temp-pick option { color: #111; background: #fff; text-transform: upperca
 .editable-title .title-pencil{font-size:.6em;opacity:0;transition:opacity .15s;color:#8a8796}
 .editable-title:hover .title-pencil{opacity:1}
 .title-input{font:inherit;width:100%;max-width:640px}
+
+/* 11/16 Peter: views list merged into the left menu under Overview */
+.ov-layout.one-col { grid-template-columns: minmax(0, 1fr); }
+.rail { overflow-y: auto; }
+.views-panel.views-in-rail { position: static; border-right: 0; padding: 2px 0 8px 14px; margin: 2px 0 6px 10px; border-left: 1px solid var(--hairline); }
+.views-panel.views-in-rail > .eyebrow { display: none; }
+.views-panel.views-in-rail .view-item { padding: 6px 8px; font-size: 13.5px; }
+.views-panel.views-in-rail .view-move { display: none; }
+.views-panel.views-in-rail .view-item:hover .view-move, .views-panel.views-in-rail .view-item.active .view-move { display: inline-flex; }
+.views-panel.views-in-rail > .btn { margin-top: 4px !important; font-size: 13px; }
+
+/* 11/16 Peter: people in the property pop-up, one-click Gmail */
+.pop-people-list { display: grid; gap: 6px; }
+.pop-person { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 10px; border: 1px solid var(--hairline-soft); border-radius: var(--r-sm); }
+.pop-person-acts { display: flex; gap: 6px; flex: 0 0 auto; }
