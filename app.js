@@ -399,6 +399,20 @@ function popupPeople(l) {
   }).catch(() => {});
   return box;
 }
+// 11/16 Peter: colour/order of a named group, borrowed from the Monday leads already in it
+function groupLook(name) {
+  const m = state.leads.find(x => x.monday?.group === name);
+  return m ? [name, m.monday.group_color, m.monday.group_order] : [name, 'var(--muted)', 99];
+}
+// 11/16 Peter: anything we declined, handed off, parked, lost or passed on can be brought back with one click
+const isInactive = (l) => !!(l.declined_at || l.handed_off_at || (!(l.airtable && !l.monday) && (['dead', 'lost', 'parked'].includes(l.status) || l.monday?.group === 'Passed')));
+function reactivateLead(l, after) {
+  if (!confirm(`Reactivate ${l.name}? It goes back into play as an active property.`)) return;
+  const checklist = { ...(l.checklist || {}) };
+  if (l.monday?.group === 'Passed' && !checklist.group) checklist.group = 'Our leads';
+  api(`/api/leads/${l.id}`, { method: 'PATCH', body: { declined_at: null, decline_reason: null, handed_off_at: null, handed_off_to: null, status: 'active', park_until: null, checklist, touch: false } })
+    .then(refreshLeads).then(() => { toast('Reactivated'); after && after(); }).catch(err => toast(err.message, true));
+}
 function leadPopup(l) {
   $('.overlay')?.remove();
   const kv = (t, v) => v ? [h('dt', {}, t), h('dd', { class: 'small', style: { whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', minWidth: 0 } }, v)] : [];
@@ -419,7 +433,8 @@ function leadPopup(l) {
     popupPeople(l),
     h('div', { class: 'modal-foot' },
       l.airtable?.url ? h('a', { class: 'btn', href: l.airtable.url, target: '_blank', rel: 'noopener', style: { marginRight: 'auto' } }, 'Open in Airtable') : null,
-      h('button', { class: `btn${l.declined_at ? '' : ' decline'}`, 'data-keep': '1', onclick: () => declineLead(l, () => { close(); render(); }) }, l.declined_at ? 'Undo decline' : 'Decline'),
+      isInactive(l) ? h('button', { class: 'btn primary', 'data-keep': '1', title: 'Bring this property back into play', onclick: () => reactivateLead(l, () => { close(); render(); }) }, 'Reactivate')
+        : h('button', { class: 'btn decline', 'data-keep': '1', onclick: () => declineLead(l, () => { close(); render(); }) }, 'Decline'),
       h('button', { class: 'btn ghost danger', 'data-keep': '1', onclick: () => deleteLead(l, () => { close(); render(); }) }, 'Delete'),
       h('button', { class: 'btn ghost', 'data-keep': '1', onclick: close }, 'Close'),
       h('button', { class: 'btn primary', 'data-keep': '1', onclick: () => { close(); navigate(`/lead/${l.id}`); } }, 'Open full page'))));
@@ -664,6 +679,7 @@ function viewPipeline(main) {
     // 10/14 Austin: Nikki Beach's own Airtable projects get groups by THEIR status, so what Nikki Beach declined is obvious
     const bucket = (l) => l.declined_at ? ['Declined', '#e5532e', 2000] : l.handed_off_at ? ['Handed Off', '#7d7a8c', 1000]
       : (l.airtable && !l.monday) ? nbGroup(l.airtable.status)
+      : l.checklist?.group ? groupLook(l.checklist.group)   // 11/16 Peter: a property can be filed under a group by hand (Gulfstream -> Palm Beach)
       : [l.monday?.group || 'Our leads', l.monday?.group_color || 'var(--muted)', l.monday?.group_order ?? 99];   // 11/1 Peter: Monday is retired; the group names it left behind stay as our own
     for (const l of [...ls].sort((a, b) => (bucket(a)[2] - bucket(b)[2]) || ((a.monday?.item_order ?? a.airtable?.item_order ?? 999) - (b.monday?.item_order ?? b.airtable?.item_order ?? 999)))) {
       const [g, gc] = bucket(l);
@@ -1275,7 +1291,8 @@ async function viewLead(main, id, tab) {
           } }, 'Done')]);
         who.addEventListener('keydown', (e) => { if (e.key === 'Enter') who.closest('.modal').querySelector('.btn.primary').click(); });
       } }, lead.handed_off_at ? 'Undo handoff' : 'Handoff'),
-      h('button', { class: `btn sm${lead.declined_at ? '' : ' decline'}`, 'data-keep': '1', title: lead.declined_at ? 'Bring this property back into play' : 'Pass on this property; it moves to Declined by us', onclick: () => declineLead(lead, () => render()) }, lead.declined_at ? 'Undo decline' : 'Decline'),
+      isInactive(lead) ? h('button', { class: 'btn sm primary', 'data-keep': '1', title: 'Bring this property back into play', onclick: () => reactivateLead(lead, () => render()) }, 'Reactivate')
+        : h('button', { class: 'btn sm decline', 'data-keep': '1', title: 'Pass on this property; it moves to Declined by us', onclick: () => declineLead(lead, () => render()) }, 'Decline'),
       h('button', { class: 'btn sm ghost danger', 'data-keep': '1', title: 'Remove this lead from the database', onclick: () => deleteLead(lead, () => navigate('/')) }, 'Delete')),
   ), h('div', { class: 'btn-row' },
     h('select', { class: 'input', style: { width: 'auto', borderRadius: '999px' }, onchange: (e) => moveStage(lead, e.target.value) }, state.config.stages.map(s => h('option', { value: s.key, selected: s.key === lead.stage }, s.label))),
