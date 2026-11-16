@@ -350,6 +350,33 @@ function galleryCard(l) {
       next ? h('div', { class: 'g-next' }, h('b', {}, 'Next: '), next) : null));
 }
 // Peter 10/28: a click opens the property as a pop-up over the list, like Airtable's record view. Open full page for everything else.
+// 11/16 Peter: lead titles are editable. Click the title (or the pencil), type, Enter or click away to save, Esc to cancel.
+function editableTitle(tag, l, attrs = {}, onSaved) {
+  const el = h(tag, { ...attrs, class: `${attrs.class || ''} editable-title`.trim(), title: 'Click to rename' }, l.name, h('span', { class: 'title-pencil', 'aria-hidden': 'true' }, ' \u270E'));
+  el.addEventListener('click', (ev) => {
+    ev.stopPropagation();
+    if (el.querySelector('input')) return;
+    const inp = h('input', { class: 'input title-input', value: l.name, 'data-keep': '1' });
+    let done = false;
+    const finish = async (commit) => {
+      if (done) return; done = true;
+      const v = inp.value.trim();
+      if (!commit || !v || v === l.name) { el.replaceChildren(l.name, h('span', { class: 'title-pencil', 'aria-hidden': 'true' }, ' \u270E')); return; }
+      try {
+        const upd = await api(`/api/leads/${l.id}`, { method: 'PATCH', body: { name: v, touch: false } });
+        l.name = upd.name; await refreshLeads(); toast('Title saved');
+        el.replaceChildren(l.name, h('span', { class: 'title-pencil', 'aria-hidden': 'true' }, ' \u270E'));
+        if (onSaved) onSaved(upd);
+      } catch (e) { toast(e.message, true); el.replaceChildren(l.name, h('span', { class: 'title-pencil', 'aria-hidden': 'true' }, ' \u270E')); }
+    };
+    inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); finish(true); } else if (e.key === 'Escape') finish(false); });
+    inp.addEventListener('blur', () => finish(true));
+    inp.addEventListener('click', (e) => e.stopPropagation());
+    el.replaceChildren(inp); inp.focus(); inp.select();
+  });
+  return el;
+}
+
 function leadPopup(l) {
   $('.overlay')?.remove();
   const kv = (t, v) => v ? [h('dt', {}, t), h('dd', { class: 'small', style: { whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', minWidth: 0 } }, v)] : [];
@@ -361,7 +388,7 @@ function leadPopup(l) {
     h('button', { class: 'rec-x', 'aria-label': 'Close', 'data-keep': '1', onclick: close }, '×'),
     l.lat && l.lng ? liveAreaMap({ lat: l.lat, lng: l.lng, radius_m: 1609, color: '#2f8596', pin: true }, 'rec-head rec-map') : h('div', { onclick: () => imgs.length && lightbox(imgs.map(apiUrl), 0, l.name), style: { cursor: imgs.length ? 'zoom-in' : '' } }, headerImage(l, 'rec-head')),
     l.lat && l.lng && imgs.length ? h('div', { style: { marginTop: '8px' } }, h('button', { class: 'btn sm', 'data-keep': '1', onclick: () => lightbox(imgs.map(apiUrl), 0, l.name) }, `Photos (${imgs.length})`)) : null,
-    h('h2', { style: { marginTop: '16px' } }, l.name),
+    editableTitle('h2', l, { style: { marginTop: '16px' } }),
     h('div', { class: 'sub' }, [l.ref, leadPlace(l), l.address].filter(Boolean).join(' · ')),
     h('div', { class: 'g-pills', style: { marginBottom: '14px' } }, h('span', { class: 'pill' }, leadType(l)), statusPill(l), tempPicker(l)),
     h('dl', { class: 'kv' }, kv('Date added', fmt.date(dateAdded(l))), kv('Declined by us', l.declined_at ? `${fmt.date(l.declined_at)}${l.decline_reason ? ': ' + l.decline_reason : ''}` : ''), kv('Summary', l.airtable ? '' : (l.summary || '')),
@@ -1193,7 +1220,7 @@ async function viewLead(main, id, tab) {
   const st = stageObj(lead.stage);
   const head = h('div', { class: 'detail-head' }, ring(lead, true), h('div', { style: { flex: 1 } },
     h('div', { class: 'eyebrow' }, `${lead.ref} · ${formatLabel(lead.format)} · ${[lead.city, lead.country].filter(Boolean).join(', ')} · Tier ${lead.tier}`),
-    h('h1', {}, lead.name),
+    editableTitle('h1', lead),
     h('div', { class: 'meta' }, gradeChip(lead), tempPicker(lead, () => reload()), h('span', { class: 'pill' }, `${stageLabel(lead.stage)} · ${lead.days_in_stage}d`), lead.registered ? h('span', { class: 'pill ok' }, `Registered ${fmt.date(lead.registered_at)}`)  : null, lead.status !== 'active' ? h('span', { class: 'pill bad' }, lead.status) : null, lead.score.knockouts.map(k => h('span', { class: 'pill bad', title: k.precedent }, `KO: ${k.label}`)), lead.score.fit.unknown_knockouts.length ? h('span', { class: 'pill warn', title: lead.score.fit.unknown_knockouts.map(k => k.label).join('; ') }, `${lead.score.fit.unknown_knockouts.length} knock-outs unverified`) : null, lead.score.rotten ? h('span', { class: 'pill bad' }, `rotting: ${lead.score.idleDays}d without inbound`) : null,
       h('button', { class: 'btn sm', 'data-keep': '1', onclick: () => { document.body.append(onePager(lead)); window.print(); setTimeout(() => $('.onepager')?.remove(), 500); } }, 'Download report'),
       h('button', { class: `btn sm${lead.handed_off_at ? '' : ' primary'}`, 'data-keep': '1', title: lead.handed_off_at ? 'Bring this property back into play' : 'Nikki Beach takes it from here; the page greys out', onclick: async () => {

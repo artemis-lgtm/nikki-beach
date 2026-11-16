@@ -492,3 +492,9 @@ select.temp-pick option { color: #111; background: #fff; text-transform: upperca
 .wl-big { font-size: 34px; font-weight: 600; color: var(--ink); }
 @media (max-width: 700px) { .wl-row { grid-template-columns: 1fr; gap: 4px; } }
 .rec-map { height: 280px; } .rec-map.leaflet-container { border-radius: var(--r-md); }
+
+/* 11/16 editable lead titles */
+.editable-title{cursor:text}
+.editable-title .title-pencil{font-size:.6em;opacity:0;transition:opacity .15s;color:#8a8796}
+.editable-title:hover .title-pencil{opacity:1}
+.title-input{font:inherit;width:100%;max-width:640px}
