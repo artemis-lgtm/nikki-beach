@@ -419,6 +419,19 @@ function reactivateLead(l, after) {
   api(`/api/leads/${l.id}`, { method: 'PATCH', body: { declined_at: null, decline_reason: null, handed_off_at: null, handed_off_to: null, status: 'active', park_until: null, checklist, touch: false } })
     .then(refreshLeads).then(() => { toast('Reactivated'); after && after(); }).catch(err => toast(err.message, true));
 }
+// 11/16 Peter: "Suitable for" under the property name, so we can see why it is on the list
+const SUITABLE_FOR = ['Nikki Beach Club', 'Lucia Beach Club', 'Cafe Nikki', 'Maison Mère', 'Nikki Beach Hotel and Club', 'Nikki Beach Hotel and Residences', 'Nikki Beach Hotel, Club and Residences'];
+function suitablePicker(l) {
+  const cur = l.checklist?.suitable_for || '';
+  const sel = h('select', { class: 'input suitable-pick', 'data-keep': '1', onclick: (e) => e.stopPropagation(), onchange: async (e) => {
+    const v = e.target.value;
+    try {
+      const upd = await api(`/api/leads/${l.id}`, { method: 'PATCH', body: { checklist: { ...(l.checklist || {}), suitable_for: v || null }, touch: false } });
+      l.checklist = upd.checklist; await refreshLeads(); toast(v ? `Suitable for ${v}` : 'Cleared');
+    } catch (err) { toast(err.message, true); }
+  } }, h('option', { value: '' }, 'Pick one…'), [...SUITABLE_FOR, ...(cur && !SUITABLE_FOR.includes(cur) ? [cur] : [])].map(o => h('option', { value: o, selected: o === cur }, o)));
+  return h('div', { class: 'suitable-row' }, h('span', { class: 'suitable-label' }, 'Suitable for'), sel);
+}
 function leadPopup(l) {
   $('.overlay')?.remove();
   const kv = (t, v) => v ? [h('dt', {}, t), h('dd', { class: 'small', style: { whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', minWidth: 0 } }, v)] : [];
@@ -431,6 +444,7 @@ function leadPopup(l) {
     l.lat && l.lng ? liveAreaMap({ lat: l.lat, lng: l.lng, radius_m: 1609, color: '#2f8596', pin: true }, 'rec-head rec-map') : h('div', { onclick: () => imgs.length && lightbox(imgs.map(apiUrl), 0, l.name), style: { cursor: imgs.length ? 'zoom-in' : '' } }, headerImage(l, 'rec-head')),
     l.lat && l.lng && imgs.length ? h('div', { style: { marginTop: '8px' } }, h('button', { class: 'btn sm', 'data-keep': '1', onclick: () => lightbox(imgs.map(apiUrl), 0, l.name) }, `Photos (${imgs.length})`)) : null,
     editableTitle('h2', l, { style: { marginTop: '16px' } }),
+    suitablePicker(l),
     h('div', { class: 'sub' }, [l.ref, leadPlace(l), l.address].filter(Boolean).join(' · ')),
     h('div', { class: 'g-pills', style: { marginBottom: '14px' } }, h('span', { class: 'pill' }, leadType(l)), statusPill(l), tempPicker(l)),
     h('dl', { class: 'kv' }, kv('Date added', fmt.date(dateAdded(l))), kv('Declined by us', l.declined_at ? `${fmt.date(l.declined_at)}${l.decline_reason ? ': ' + l.decline_reason : ''}` : ''), kv('Summary', l.airtable ? '' : (l.summary || '')),
@@ -1284,6 +1298,7 @@ async function viewLead(main, id, tab) {
   const head = h('div', { class: 'detail-head' }, ring(lead, true), h('div', { style: { flex: 1 } },
     h('div', { class: 'eyebrow' }, `${lead.ref} · ${formatLabel(lead.format)} · ${[lead.city, lead.country].filter(Boolean).join(', ')} · Tier ${lead.tier}`),
     editableTitle('h1', lead),
+    suitablePicker(lead),
     h('div', { class: 'meta' }, gradeChip(lead), tempPicker(lead, () => reload()), h('span', { class: 'pill' }, `${stageLabel(lead.stage)} · ${lead.days_in_stage}d`), lead.registered ? h('span', { class: 'pill ok' }, `Registered ${fmt.date(lead.registered_at)}`)  : null, lead.status !== 'active' ? h('span', { class: 'pill bad' }, lead.status) : null, lead.score.knockouts.map(k => h('span', { class: 'pill bad', title: k.precedent }, `KO: ${k.label}`)), lead.score.fit.unknown_knockouts.length ? h('span', { class: 'pill warn', title: lead.score.fit.unknown_knockouts.map(k => k.label).join('; ') }, `${lead.score.fit.unknown_knockouts.length} knock-outs unverified`) : null, lead.score.rotten ? h('span', { class: 'pill bad' }, `rotting: ${lead.score.idleDays}d without inbound`) : null,
       h('button', { class: 'btn sm', 'data-keep': '1', onclick: () => { document.body.append(onePager(lead)); window.print(); setTimeout(() => $('.onepager')?.remove(), 500); } }, 'Download report'),
       h('button', { class: `btn sm${lead.handed_off_at ? '' : ' primary'}`, 'data-keep': '1', title: lead.handed_off_at ? 'Bring this property back into play' : 'Nikki Beach takes it from here; the page greys out', onclick: async () => {
