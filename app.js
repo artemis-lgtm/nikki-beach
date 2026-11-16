@@ -221,6 +221,12 @@ function mondayCell(l, title) {
 // 10/14 Austin (lag): every Leaflet map the app makes is torn down on the next redraw, or they pile up in memory
 const liveMaps = new Set(), liveObservers = new Set();
 function dropMaps() { for (const io of liveObservers) io.disconnect(); liveObservers.clear(); for (const m of liveMaps) try { m.remove(); } catch {} liveMaps.clear(); }
+// 11/16 Peter: compact grid keeps a small map button instead of the big map tile between groups
+function groupMapButton(leads) {
+  const pts = leads.filter(l => l.lat && l.lng).map(l => [l.lat, l.lng]);
+  if (!pts.length) return null;
+  return h('button', { class: 'btn sm ghost', 'data-keep': '1', title: 'Open these properties on the map', onclick: () => { state.mapFocus = pts; navigate('/map'); } }, 'Show on map');
+}
 function groupMap(leads, color) {
   const pts = leads.filter(l => l.lat && l.lng).map(l => [l.lat, l.lng]);
   if (!pts.length || typeof L === 'undefined') return null;
@@ -686,21 +692,21 @@ function viewPipeline(main) {
       if (!groups.has(g)) groups.set(g, { color: gc, leads: [] });
       groups.get(g).leads.push(l);
     }
-    wrap.replaceChildren(...(groups.size ? [...groups].map(([g, { color, leads }]) => { const box = h('div', { class: 'card wide-scroll', style: { borderLeft: `4px solid ${color}` } });
+    wrap.replaceChildren(...(groups.size ? [...groups].map(([g, { color, leads }]) => { const box = h('div', { class: 'card wide-scroll grid-compact', style: { borderLeft: `4px solid ${color}` } });   // 11/16 Peter: Airtable-style, one line per property
       const nb = leads.every(l => l.airtable && !l.monday);                 // a Nikki Beach Airtable group: their columns, not Monday's
       const collapsible = nb && NB_COLLAPSED.has(g); const open = !collapsible || state.nbOpen?.[g] || f.q || v.q;
       const cols = nb ? AIRTABLE_COLS : MONDAY_COLS; const cell = nb ? airtableCell : mondayCell;
       if (!open) box.style.display = 'none';
-      return h('div', { style: { marginBottom: '28px' } },
-      h('div', { style: { display: 'flex', alignItems: 'flex-end', gap: '14px', margin: '0 0 10px' } }, h('h3', { style: { color, margin: 0 } }, g), h('span', { class: 'small muted' }, `${leads.length} propert${leads.length > 1 ? 'ies' : 'y'}`),
+      return h('div', { style: { marginBottom: '16px' } },
+      h('div', { style: { display: 'flex', alignItems: 'center', gap: '14px', margin: '0 0 6px' } }, h('h3', { style: { color, margin: 0 } }, g), h('span', { class: 'small muted' }, `${leads.length} propert${leads.length > 1 ? 'ies' : 'y'}`),
         collapsible ? h('button', { class: 'btn sm', 'data-keep': '1', onclick: () => { state.nbOpen = { ...(state.nbOpen || {}), [g]: !open }; draw(); } }, open ? 'Hide' : `Show all ${leads.length}`) : null,
-        h('span', { style: { marginLeft: 'auto' } }, groupMap(leads, color))),   // area map on the right; More columns buttons removed 9/30 (the scrollbar stays)
+        h('span', { style: { marginLeft: 'auto' } }, groupMapButton(leads))),   // area map on the right; More columns buttons removed 9/30 (the scrollbar stays)
       (open && box.append(h('table', { class: 'table' },
         h('thead', {}, h('tr', {}, h('th', {}, 'Property'), h('th', { style: { whiteSpace: 'nowrap' } }, 'Date added'), h('th', {}, 'Hot / cold'), nb ? null : h('th', { style: { whiteSpace: 'nowrap' } }, 'Nikki Beach status'), cols.map(c => h('th', { style: { whiteSpace: 'nowrap' } }, c)))),
         h('tbody', {}, leads.map(l => h('tr', { class: l.declined_at ? 'handed-off-row declined-row' : l.handed_off_at ? 'handed-off-row' : '', onclick: (e) => { if (e.target.closest('select,a,button')) return; leadPopup(l); } },
           h('td', { style: { minWidth: '200px' } }, h('div', { class: 'lead-name' }, l.name, isNewListing(l) ? h('span', { class: 'new-listing' }, 'New listing') : null), h('div', { class: 'lead-loc' }, l.ref)),
           h('td', { class: 'small', style: { whiteSpace: 'nowrap' } }, fmt.date(dateAdded(l))),
-          h('td', { style: { minWidth: '110px' } }, tempPicker(l), h('div', { style: { marginTop: '6px' } }, heatBar(l))),
+          h('td', { style: { minWidth: '110px' } }, tempPicker(l)),
           nb ? null : h('td', {}, l.airtable ? nbPill(l.airtable.status) : ''),
           cols.map(c => cell(l, c)),
         ))))), box)); })
