@@ -1059,15 +1059,61 @@ function viewPeople(main) {
   const section = (title, count, color, head, rows) => h('div', { style: { marginBottom: '28px' } },
     h('div', { style: { display: 'flex', alignItems: 'center', gap: '10px', margin: '0 0 10px' } }, h('h3', { style: { color, margin: 0 } }, title), h('span', { class: 'small muted' }, `${count}`)),
     h('div', { class: 'card wide-scroll', style: { borderLeft: `4px solid ${color}` } }, h('table', { class: 'table' }, h('thead', {}, h('tr', {}, head.map(x => h('th', { style: { whiteSpace: 'nowrap' } }, x)))), h('tbody', {}, rows))));
-  const people = [...state.contacts].sort((a, b) => a.name.localeCompare(b.name));
+  // 11/17 Peter: People list sorts by any column header, contacts can be pinned to the top (shared), and Notes edit in place with one click
+  const peopleBox = h('div', {});
+  const sortKey = { Name: c => c.name, Title: c => c.title, Company: c => c.org_name, Phone: c => c.phone, Email: c => c.email, Properties: c => state.leads.filter(l => (l.contact_ids || []).includes(c.id)).map(l => l.name).join(' '), Notes: c => (c.notes || '').split('\nMonday:')[0] };
+  const ps = state.peopleSort || (state.peopleSort = { key: 'Name', dir: 1 });
+  const noteCell = (c) => {
+    const visible = () => (c.notes || '').split('\nMonday:')[0];
+    const td = h('td', { class: 'small note-cell', style: { minWidth: '260px', maxWidth: '380px' }, title: 'Click to edit the note' }, clip(visible()) || h('span', { class: 'muted' }, 'Add a note'));
+    td.addEventListener('click', (e) => {
+      e.stopPropagation(); if (td.querySelector('textarea')) return;
+      const tail = (c.notes || '').includes('\nMonday:') ? '\nMonday:' + (c.notes || '').split('\nMonday:').slice(1).join('\nMonday:') : '';
+      const ta = h('textarea', { class: 'input note-edit', rows: 3, 'data-keep': '1' }); ta.value = visible();
+      let done = false;
+      const finish = async (save) => {
+        if (done) return; done = true;
+        const v = ta.value.trim();
+        if (save && v !== visible().trim()) {
+          try { const upd = await api(`/api/contacts/${c.id}`, { method: 'PATCH', body: { notes: (v + tail) || null } }); c.notes = upd.notes; const sc = state.contacts.find(x => x.id === c.id); if (sc) sc.notes = upd.notes; toast('Note saved'); }
+          catch (err) { toast(err.message, true); }
+        }
+        td.replaceChildren(clip(visible()) || h('span', { class: 'muted' }, 'Add a note'));
+      };
+      ta.addEventListener('keydown', (ev) => { if (ev.key === 'Enter' && !ev.shiftKey) { ev.preventDefault(); finish(true); } else if (ev.key === 'Escape') finish(false); });
+      ta.addEventListener('blur', () => finish(true));
+      ta.addEventListener('click', (ev) => ev.stopPropagation());
+      td.replaceChildren(ta); ta.focus();
+    });
+    return td;
+  };
+  const drawPeople = () => {
+    const pinned = new Set(state.pinnedContacts || []);
+    const f = sortKey[ps.key];
+    const people = [...state.contacts].sort((a, b) => { const x = String(f(a) || '').trim(), y = String(f(b) || '').trim(); return (pinned.has(b.id) - pinned.has(a.id)) || ((!x) - (!y)) || (ps.dir * x.localeCompare(y, undefined, { sensitivity: 'base' })); });   // blanks always last
+    const th = (name) => h('th', { class: `sortable${ps.key === name ? ' sorted' : ''}`, style: { whiteSpace: 'nowrap' }, title: 'Click to sort', onclick: () => { if (ps.key === name) ps.dir = -ps.dir; else { ps.key = name; ps.dir = 1; } drawPeople(); } }, name, ps.key === name ? (ps.dir > 0 ? ' \u25B2' : ' \u25BC') : '');
+    const pinBtn = (c) => h('button', { class: `pin-btn${pinned.has(c.id) ? ' on' : ''}`, 'data-keep': '1', title: pinned.has(c.id) ? 'Unpin' : 'Pin to top', onclick: async (e) => {
+      e.stopPropagation(); const next = pinned.has(c.id) ? [...pinned].filter(x => x !== c.id) : [c.id, ...pinned];
+      try { state.pinnedContacts = await api('/api/pinned-contacts', { method: 'PUT', body: next }); drawPeople(); } catch (err) { toast(err.message, true); }
+    } }, pinned.has(c.id) ? '\u2605' : '\u2606');
+    peopleBox.replaceChildren(h('div', { style: { marginBottom: '28px' } },
+      h('div', { style: { display: 'flex', alignItems: 'center', gap: '10px', margin: '0 0 10px' } }, h('h3', { style: { color: 'var(--link)', margin: 0 } }, 'People'), h('span', { class: 'small muted' }, `${people.length}${pinned.size ? ` · ${pinned.size} pinned` : ''}`)),
+      h('div', { class: 'card wide-scroll', style: { borderLeft: '4px solid var(--link)' } }, h('table', { class: 'table' },
+        h('thead', {}, h('tr', {}, h('th', { style: { width: '34px' } }, ''), ...['Name', 'Title', 'Company', 'Phone', 'Email', 'Properties', 'Notes'].map(th))),
+        h('tbody', {}, people.map(c => h('tr', { class: pinned.has(c.id) ? 'pinned-row' : '', onclick: () => contactModal(c) },
+          h('td', {}, pinBtn(c)),
+          h('td', { style: { minWidth: '180px' } }, h('div', { class: 'lead-name' }, c.name)),
+          h('td', { class: 'small' }, c.title || ''), h('td', { class: 'small', style: { minWidth: '160px' } }, c.org_name || ''),
+          h('td', { class: 'small', style: { whiteSpace: 'nowrap' } }, linkOrMuted(c.phone, `tel:${c.phone}`)), h('td', { class: 'small' }, linkOrMuted(c.email, `mailto:${c.email}`)),
+          h('td', {}, propsFor(l => (l.contact_ids || []).includes(c.id))),
+          noteCell(c))))))));
+  };
+  drawPeople();
+  api('/api/pinned-contacts').then(p => { state.pinnedContacts = p; drawPeople(); }).catch(() => {});
+
   const orgs = [...state.orgs].sort((a, b) => a.name.localeCompare(b.name));
   main.append(peopleSearch(() => main),
-    section('People', people.length, 'var(--link)', ['Name', 'Title', 'Company', 'Phone', 'Email', 'Properties', 'Notes'], people.map(c => h('tr', { onclick: () => contactModal(c) },
-      h('td', { style: { minWidth: '180px' } }, h('div', { class: 'lead-name' }, c.name)),
-      h('td', { class: 'small' }, c.title || ''), h('td', { class: 'small', style: { minWidth: '160px' } }, c.org_name || ''),
-      h('td', { class: 'small', style: { whiteSpace: 'nowrap' } }, linkOrMuted(c.phone, `tel:${c.phone}`)), h('td', { class: 'small' }, linkOrMuted(c.email, `mailto:${c.email}`)),
-      h('td', {}, propsFor(l => (l.contact_ids || []).includes(c.id))),
-      h('td', { class: 'small', style: { minWidth: '260px', maxWidth: '380px' }, title: c.notes || '' }, clip((c.notes || '').split('\nMonday:')[0]))))),
+    peopleBox,
     section('Organisations', orgs.length, 'var(--warm)', ['Name', 'Type', 'Country', 'Website', 'Properties', 'Portfolio'], orgs.map(o => h('tr', { onclick: () => orgModal(o) },
       h('td', { style: { minWidth: '180px' } }, h('div', { class: 'lead-name' }, o.name)),
       h('td', { class: 'small', style: { whiteSpace: 'nowrap' } }, fmt.title(o.kind)), h('td', { class: 'small' }, o.country || ''),
